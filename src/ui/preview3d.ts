@@ -21,6 +21,7 @@ export class ReliefPreview {
   private light = new THREE.DirectionalLight(0xffffff, 2.6);
   private fill = new THREE.HemisphereLight(0xffffff, 0x404040, 0.25);
   private mesh: THREE.Mesh | null = null;
+  private skirt: THREE.Mesh | null = null;
   private material = new THREE.MeshStandardMaterial({ ...FINISHES.clay, flatShading: false });
   private size = { w: 100, h: 100 };
   private azimuth = 135;
@@ -97,9 +98,55 @@ export class ReliefPreview {
     pos.needsUpdate = true;
     geom.computeVertexNormals();
     geom.computeBoundingSphere();
+    this.updateSkirt(z, nx, ny, widthMm, heightMm);
     this.placeLight();
     if (sizeChanged) this.resetView();
     this.requestRender();
+  }
+
+  /**
+   * Side walls (top edge of the relief straight down to Z = 0) and the flat bottom, so the
+   * preview shows the full block, base thickness included, like the STEP solid and STL exports.
+   */
+  private updateSkirt(z: Float32Array, nx: number, ny: number, W: number, H: number) {
+    const X = (i: number) => -W / 2 + (i * W) / (nx - 1);
+    const Y = (j: number) => -H / 2 + (j * H) / (ny - 1);
+    // boundary loop counter-clockwise seen from above: bottom edge, right, top, left
+    const loop: [number, number][] = [];
+    for (let i = 0; i < nx - 1; i++) loop.push([i, 0]);
+    for (let j = 0; j < ny - 1; j++) loop.push([nx - 1, j]);
+    for (let i = nx - 1; i > 0; i--) loop.push([i, ny - 1]);
+    for (let j = ny - 1; j > 0; j--) loop.push([0, j]);
+    const tris = loop.length * 2 + 2;
+    const p = new Float32Array(tris * 9);
+    let o = 0;
+    const v = (x: number, y: number, h: number) => {
+      p[o++] = x;
+      p[o++] = y;
+      p[o++] = h;
+    };
+    for (let k = 0; k < loop.length; k++) {
+      const [ai, aj] = loop[k];
+      const [bi, bj] = loop[(k + 1) % loop.length];
+      const ax = X(ai), ay = Y(aj), az = z[aj * nx + ai];
+      const bx = X(bi), by = Y(bj), bz = z[bj * nx + bi];
+      // outward-facing quad: a_bottom, b_bottom, b_top / a_bottom, b_top, a_top
+      v(ax, ay, 0); v(bx, by, 0); v(bx, by, bz);
+      v(ax, ay, 0); v(bx, by, bz); v(ax, ay, az);
+    }
+    // bottom (facing down)
+    v(-W / 2, -H / 2, 0); v(W / 2, H / 2, 0); v(W / 2, -H / 2, 0);
+    v(-W / 2, -H / 2, 0); v(-W / 2, H / 2, 0); v(W / 2, H / 2, 0);
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(p, 3));
+    geom.computeVertexNormals(); // non-indexed: flat normals per triangle
+    if (!this.skirt) {
+      this.skirt = new THREE.Mesh(geom, this.material);
+      this.scene.add(this.skirt);
+    } else {
+      this.skirt.geometry.dispose();
+      this.skirt.geometry = geom;
+    }
   }
 
   resetView() {
