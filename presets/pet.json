@@ -1,0 +1,11 @@
+{
+  "method": "gradient",
+  "compression": 0.7,
+  "detailGain": 2.0,
+  "baseScale": 0.04,
+  "falloffWidth": 2.5,
+  "bgMode": "flat",
+  "textureGain": 0.15,
+  "maskCleanup": 0.8,
+  "toneDepth": 0
+}

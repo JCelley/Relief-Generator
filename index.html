@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Relief Generator</title>
+    <meta name="description" content="Turn a photo into a machinable bas-relief (STEP B-spline surface or solid, STL). Runs entirely in your browser." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23222'/%3E%3Cpath d='M4 24c4-10 8-14 12-14s8 4 12 14' fill='none' stroke='%23e0b070' stroke-width='3'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./src/ui/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Relief Generator</h1>
+      <span class="sub">photo → bas-relief → STEP / STL &middot; runs locally, nothing is uploaded</span>
+      <span id="device" class="pill"></span>
+    </header>
+    <main>
+      <aside id="panel">
+        <section>
+          <label class="drop" id="drop">
+            <input type="file" id="file" accept="image/*" hidden />
+            <strong>Drop a photo</strong> or click to choose
+          </label>
+          <div class="row">
+            <label for="maskModel">Subject mask</label>
+            <select id="maskModel">
+              <option value="birefnet">BiRefNet lite (general, best)</option>
+              <option value="ormbg">ormbg (people, lighter)</option>
+              <option value="modnet">MODNet (portraits, fastest)</option>
+              <option value="none">None (whole photo)</option>
+            </select>
+          </div>
+          <div class="row">
+            <label for="deviceSel">Compute</label>
+            <select id="deviceSel">
+              <option value="auto">Auto (WebGPU if available)</option>
+              <option value="webgpu">WebGPU</option>
+              <option value="wasm">WASM (CPU)</option>
+            </select>
+          </div>
+          <div id="status" class="status">Load a photo to begin.</div>
+          <div id="maskWarn" class="warn" hidden>
+            <span id="maskWarnText"></span>
+            <button id="maskWarnRetry" class="small"></button>
+          </div>
+        </section>
+
+        <section>
+          <h2>Size</h2>
+          <div class="row">
+            <label for="units">Units</label>
+            <select id="units">
+              <option value="in">inches</option>
+              <option value="mm">mm</option>
+            </select>
+          </div>
+          <div class="row">
+            <label for="width">Width</label>
+            <input type="number" id="width" step="0.01" min="0.1" />
+          </div>
+          <div class="row">
+            <label>Height</label>
+            <output id="heightOut">–</output>
+          </div>
+        </section>
+
+        <section>
+          <h2>Relief</h2>
+          <div class="row">
+            <label for="preset">Preset</label>
+            <select id="preset">
+              <option value="portrait">Portrait</option>
+              <option value="pet">Pet</option>
+              <option value="object">Object</option>
+              <option value="landscape">Landscape</option>
+              <option value="illustration">Illustration / cartoon</option>
+            </select>
+          </div>
+          <div id="basic"></div>
+          <details id="advancedBox">
+            <summary>Advanced</summary>
+            <div id="advanced"></div>
+          </details>
+        </section>
+
+        <section>
+          <h2>Export</h2>
+          <div class="exports">
+            <button id="expSurface" disabled title="Top surface only, as a B-spline surface body">STEP surface</button>
+            <button id="expSolid" disabled title="Closed solid: B-spline top, planar walls and bottom">STEP solid</button>
+            <button id="expStl" disabled title="Watertight triangle mesh">STL</button>
+          </div>
+          <div id="exportInfo" class="status"></div>
+        </section>
+      </aside>
+
+      <div id="views">
+        <div class="thumbs">
+          <figure><canvas id="cvPhoto"></canvas><figcaption>original</figcaption></figure>
+          <figure><canvas id="cvMask"></canvas><figcaption>mask</figcaption></figure>
+          <figure><canvas id="cvDepth"></canvas><figcaption>depth</figcaption></figure>
+          <figure><canvas id="cvRelief"></canvas><figcaption>relief</figcaption></figure>
+        </div>
+        <div id="viewer">
+          <div id="three"></div>
+          <div class="hud">
+            <div id="dims">–</div>
+            <div class="lightctl">
+              <label>Light azimuth <input type="range" id="lightAz" min="0" max="360" value="135" /></label>
+              <label>Light elevation <input type="range" id="lightEl" min="3" max="90" value="25" /></label>
+              <label>Finish
+                <select id="finish">
+                  <option value="clay">Clay</option>
+                  <option value="wood">Wood</option>
+                  <option value="aluminum">Aluminum</option>
+                </select>
+              </label>
+              <button id="resetView" class="small">Reset view</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+    <script type="module" src="./src/ui/main.ts"></script>
+  </body>
+</html>
