@@ -1,0 +1,12 @@
+{
+  "method": "baseDetail",
+  "compression": 0.85,
+  "detailGain": 1.8,
+  "baseScale": 0.03,
+  "falloffWidth": 0,
+  "bgMode": "keep",
+  "bgLevel": 1,
+  "textureGain": 0,
+  "maskCleanup": 0,
+  "toneDepth": 0
+}

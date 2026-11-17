@@ -1,0 +1,9 @@
+{
+  "preset": "portrait",
+  "base": { "widthMm": 152.4 },
+  "vary": {
+    "method": ["baseDetail", "gradient"],
+    "compression": [0.6, 0.8],
+    "detailGain": [1.0, 2.0]
+  }
+}
