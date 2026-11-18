@@ -8,5 +8,5 @@
   "bgLevel": 1,
   "textureGain": 0,
   "maskCleanup": 0,
-  "toneDepth": 0
+  "toneDepth": 0.5
 }

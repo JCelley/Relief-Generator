@@ -7,5 +7,5 @@
   "bgMode": "flat",
   "textureGain": 0,
   "maskCleanup": 0.8,
-  "toneDepth": 0
+  "toneDepth": 0.4
 }

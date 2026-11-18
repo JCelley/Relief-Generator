@@ -5,6 +5,7 @@
 import { AutoModel, AutoProcessor, RawImage, Tensor } from '@huggingface/transformers';
 import type { Grid } from '../core/grid';
 import type { RawInputs } from '../core/relief';
+import { findPlainBorder } from '../core/trim';
 
 export type Device = 'webgpu' | 'wasm' | 'cpu';
 
@@ -156,14 +157,31 @@ export interface AnalyzeOptions {
   workingMaxSide: number;
   progress?: Progress;
   onStage?: (stage: string) => void;
+  /** crop off a plain border (poster matte, letterbox) first; default true */
+  trimBorder?: boolean;
+}
+
+/** Crops a plain border off the photo; returns the photo unchanged when there is none. */
+export function trimPlainBorder(rgb: RawImage): { image: RawImage; crop?: RawInputs['crop'] } {
+  const box = findPlainBorder(rgb.data as Uint8ClampedArray, rgb.width, rgb.height, rgb.channels);
+  if (!box) return { image: rgb };
+  const out = new Uint8ClampedArray(box.w * box.h * 3);
+  const src = rgb.data as Uint8ClampedArray;
+  for (let y = 0; y < box.h; y++) {
+    const s0 = ((box.y + y) * rgb.width + box.x) * 3;
+    out.set(src.subarray(s0, s0 + box.w * 3), y * box.w * 3);
+  }
+  return { image: new RawImage(out, box.w, box.h, 3), crop: { ...box, srcW: rgb.width, srcH: rgb.height } };
 }
 
 export async function analyzePhoto(image: RawImage, opts: AnalyzeOptions): Promise<RawInputs> {
-  const rgb = image.rgb();
+  let rgb = image.rgb();
+  let crop: RawInputs['crop'];
+  if (opts.trimBorder !== false) ({ image: rgb, crop } = trimPlainBorder(rgb));
   opts.onStage?.('depth');
   const depth = await estimateDepth(rgb, opts.device, opts.progress);
   opts.onStage?.('mask');
   const mask = await estimateMask(rgb, opts.maskModel, opts.device, opts.progress);
   const luminance = await luminanceOf(rgb, opts.workingMaxSide);
-  return { luminance, depth, mask };
+  return { luminance, depth, mask, crop };
 }

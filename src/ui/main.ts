@@ -1,6 +1,7 @@
 import { DEFAULT_PARAMS, PRESETS, PresetName, ReliefParams } from '../core/params';
 import { shadeHeightfield } from '../core/shade';
 import type { Grid } from '../core/grid';
+import type { RawInputs } from '../core/relief';
 import type { MaskModelKey, Device } from '../models/infer';
 import type { ComputeRequest, ComputeResponse, ModelRequest, ModelResponse, ReliefStats } from '../workers/protocol';
 import { FIELDS, Field } from './schema';
@@ -192,6 +193,7 @@ function requestRelief() {
   }
   busy = true;
   dirty = false;
+  showMaskWarning();
   sendCompute({ type: 'params', id: ++reliefId, params: { ...params } });
 }
 
@@ -212,13 +214,18 @@ function drawGrid(canvas: HTMLCanvasElement, g: Grid) {
   drawGray(canvas, g.w, g.h, (i) => 255 * g.data[i]);
 }
 
-async function drawPhoto(file: Blob) {
+/** crop: the part of the photo that was analysed (a plain border may have been trimmed off) */
+async function drawPhoto(file: Blob, crop?: RawInputs['crop']) {
   const bmp = await createImageBitmap(file);
   const c = $<HTMLCanvasElement>('cvPhoto');
-  const s = Math.min(1, 600 / Math.max(bmp.width, bmp.height));
-  c.width = Math.round(bmp.width * s);
-  c.height = Math.round(bmp.height * s);
-  c.getContext('2d')!.drawImage(bmp, 0, 0, c.width, c.height);
+  // the worker decodes the same file, so scale its crop box in case the sizes differ
+  const k = crop ? bmp.width / crop.srcW : 1;
+  const sx = crop ? crop.x * k : 0, sy = crop ? crop.y * k : 0;
+  const sw = crop ? crop.w * k : bmp.width, sh = crop ? crop.h * k : bmp.height;
+  const s = Math.min(1, 600 / Math.max(sw, sh));
+  c.width = Math.round(sw * s);
+  c.height = Math.round(sh * s);
+  c.getContext('2d')!.drawImage(bmp, sx, sy, sw, sh, 0, 0, c.width, c.height);
   bmp.close();
 }
 
@@ -240,16 +247,21 @@ function setExportsEnabled(on: boolean) {
 // ---- mask sanity check --------------------------------------------------------------------------
 let lastFile: File | null = null;
 let usedMaskModel: MaskModelKey = 'none';
+let lastMask: Grid | null = null;
+let lastQuality: { thr: number; q: ReturnType<typeof maskQuality> } | null = null;
 
-function showMaskWarning(mask: Grid) {
+function showMaskWarning(mask: Grid | null = lastMask) {
   const box = $('maskWarn');
   box.hidden = true;
-  if (usedMaskModel === 'none') return;
-  const q = maskQuality(mask, params.maskThreshold);
-  console.info('mask quality', q);
+  lastMask = mask;
+  if (!mask || usedMaskModel === 'none') return;
+  // keeping the whole background at full height (Landscape) does not depend on the mask
+  if (params.bgMode === 'keep' && params.bgLevel >= 0.9) return;
+  if (!lastQuality || lastQuality.thr !== params.maskThreshold) lastQuality = { thr: params.maskThreshold, q: maskQuality(mask, params.maskThreshold) };
+  const q = lastQuality.q;
   if (!q.suspect) return;
   const alt: MaskModelKey = usedMaskModel === 'birefnet' ? 'ormbg' : 'birefnet';
-  $('maskWarnText').textContent = `The subject mask looks wrong: ${q.reason}. The relief will probably come out in fragments.`;
+  $('maskWarnText').textContent = `The subject mask looks wrong: ${q.reason}. The relief will probably come out in fragments. For a scene with no single subject, use the Landscape preset.`;
   const btn = $<HTMLButtonElement>('maskWarnRetry');
   btn.textContent = `Retry with ${MASK_MODELS[alt as Exclude<MaskModelKey, 'none'>].label.split(' (')[0]}`;
   btn.onclick = () => {
@@ -262,6 +274,7 @@ function showMaskWarning(mask: Grid) {
 
 async function loadPhoto(file: File) {
   lastFile = file;
+  lastMask = null;
   $('maskWarn').hidden = true;
   photoName = file.name.replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_') || 'relief';
   haveInputs = false;
@@ -330,7 +343,11 @@ function onModelMessage(ev: MessageEvent<ModelResponse>) {
   }
   usedMaskModel = m.maskModel;
   $('device').textContent = m.device === 'webgpu' ? 'WebGPU' : 'WASM (CPU)';
-  status(`Analysed in ${(m.ms / 1000).toFixed(1)} s on ${m.device === 'webgpu' ? 'WebGPU' : 'CPU (WASM)'}.`);
+  status(
+    `Analysed in ${(m.ms / 1000).toFixed(1)} s on ${m.device === 'webgpu' ? 'WebGPU' : 'CPU (WASM)'}.` +
+      (m.raw.crop ? ' Plain border around the picture trimmed off.' : ''),
+  );
+  if (m.raw.crop && lastFile) drawPhoto(lastFile, m.raw.crop);
   const t: Transferable[] = [m.raw.luminance.data.buffer, m.raw.depth.data.buffer];
   if (m.raw.mask) t.push(m.raw.mask.data.buffer);
   sendCompute({ type: 'inputs', raw: m.raw }, t);
@@ -348,6 +365,7 @@ computeWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
   if (m.type === 'prepared') {
     drawGrid($<HTMLCanvasElement>('cvMask'), m.mask);
     drawGrid($<HTMLCanvasElement>('cvDepth'), m.depth);
+    lastQuality = null;
     showMaskWarning(m.mask);
     return;
   }

@@ -33,7 +33,7 @@ function loadGrid(path: string): Grid | null {
 /** Run the models on a photo (CPU, onnxruntime-node), cached in .cache/ by content hash. */
 export async function analyzeCached(file: string, maskKey: MaskModelKey, workSize: number): Promise<RawInputs> {
   mkdirSync(cacheDir, { recursive: true });
-  const hash = createHash('sha1').update(readFileSync(file)).update(`${maskKey}|${workSize}`).digest('hex').slice(0, 12);
+  const hash = createHash('sha1').update(readFileSync(file)).update(`${maskKey}|${workSize}|trim1`).digest('hex').slice(0, 12);
   const base = join(cacheDir, `${basename(file, extname(file))}-${hash}`);
   const lum = loadGrid(`${base}.lum`);
   const depth = loadGrid(`${base}.depth`);

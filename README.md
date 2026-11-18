@@ -13,7 +13,7 @@ photo ─► subject mask ─► depth (Depth Anything V2 Small) ─► relief c
 
 1. `npm install`, then `npm run dev` and open the printed URL in Chrome or Edge (WebGPU). You can also use the GitHub Pages build.
 2. Drop a photo. On the first run the models download (about 140 MB) and are cached by the browser after that.
-3. Pick a preset (Portrait / Pet / Object / Landscape / Illustration), set the width and relief height, and judge the result in the 3D view by moving the raking light.
+3. Pick a preset (Portrait / Pet / Object / Landscape / Illustration), set the width and relief height, and judge the result in the 3D view by moving the raking light. Use **Landscape** for scenes with no single subject (sunsets, trees, buildings): it keeps the whole picture instead of cutting out a subject. A plain border around the picture (poster matte, black bars) is trimmed off automatically so it doesn't become a raised frame.
 4. Export:
    - **STEP surface**: one smooth B-spline face (top only). Define stock in Fusion.
    - **STEP solid**: B-spline top, 4 planar walls and a planar bottom, sewn into one closed body (needs base thickness > 0).
@@ -32,7 +32,7 @@ Units in the files are mm. The bottom of the part is Z = 0, the base top is at Z
 | Edge falloff | Width of the smooth fillet from the subject edge down to the base, so there is no vertical cliff |
 | Background | Flat base, or keep the background compressed (`Background level`) |
 | Intaglio | Cut-in relief (subject recessed below the top surface) |
-| Tone carving | Cuts areas that are clearly darker than their surroundings into the surface (and raises lighter ones) by this many mm, e.g. pupils and highlights. Depth estimation can't see painted features: a black pupil is the same distance away as the white of the eye. On in the **Illustration** preset (0.8 mm), off for photos, where shadows and dark hair would turn into dents. *Raise dark areas* flips it; *Tone carving scale* (Advanced) sets how big an area each pixel is compared against. |
+| Tone carving | Cuts areas that are clearly darker than their surroundings into the surface (and raises lighter ones) by this many mm, e.g. pupils and highlights. Depth estimation can't see painted features: a black pupil is the same distance away as the white of the eye. Presets: **Illustration** 0.8 mm, **Landscape** 0.5 mm (brings out the sun, clouds and silhouettes that depth misses), **Portrait** 0.4 mm (eyes, teeth, beard); off for Pet and Object, where dark fur and shadows would turn into dents. *Raise dark areas* flips it; *Tone carving scale* (Advanced) sets how big an area each pixel is compared against. |
 | Advanced → Finishing tool Ø | Default 1/16" ball. Sets the grid spacing (auto = tool radius / 2) |
 | Advanced → B-spline tolerance | Max deviation of the STEP surface from the grid (default 0.01 mm) |
 | Advanced → Mask cleanup | Removes mask slivers thinner than the cutter can reproduce (whiskers, stray hair) |

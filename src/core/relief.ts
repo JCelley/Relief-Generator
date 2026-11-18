@@ -12,6 +12,8 @@ export interface RawInputs {
   depth: Grid;
   /** subject alpha 0..1 at model resolution; null = whole image is subject */
   mask: Grid | null;
+  /** plain border (matte / letterbox) that was cropped off the photo before analysis, in photo pixels */
+  crop?: { x: number; y: number; w: number; h: number; srcW: number; srcH: number };
 }
 
 /** Inputs upsampled to working resolution. Depends only on guideEps. */
@@ -218,7 +220,7 @@ export function computeRelief(prep: Prepared, p: ReliefParams): ReliefResult {
 
   // tone carving (in mm, so it does not depend on the relief normalisation)
   if (p.toneDepth > 0 && p.reliefHeight > 0) {
-    const t = toneMap(prep.luminance, domain, p.toneScale);
+    const t = toneMap(prep.luminance, workDomain, p.toneScale);
     const k = (p.toneDepth / p.reliefHeight) * (p.toneDarkUp ? -1 : 1);
     let max = 0;
     for (let i = 0; i < H.data.length; i++) {
