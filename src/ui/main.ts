@@ -164,6 +164,8 @@ function syncOutputs() {
     vis('toneScale', params.toneDepth > 0);
   } else vis('lithoRadius', params.lithoShape === 'curved');
   $('presetRow').hidden = litho;
+  $('lithoTips').hidden = !litho;
+  updateLithoWarn();
   ($('mode') as HTMLSelectElement).value = params.mode;
   $('reliefCap').textContent = litho ? 'backlit' : 'relief';
   updateDims();
@@ -185,6 +187,21 @@ function updateDims() {
     `grid   ${s.nx} × ${s.ny} @ ${s.dx.toFixed(3)} mm` +
     (s.ms ? `   (${Math.round(s.ms)} ms)` : '') +
     curvedInfo(s);
+}
+
+/** warns about thicknesses outside what prints and lights well (white PLA, 0.4 mm nozzle) */
+function updateLithoWarn() {
+  const box = $('lithoWarn');
+  const msgs: string[] = [];
+  if (params.mode === 'lithophane') {
+    if (params.lithoMin < 0.6) msgs.push(`Min thickness ${fmtLen(params.lithoMin)} is below ${fmtLen(0.6)}: the brightest areas may break or print with pinholes.`);
+    if (params.lithoMax > 4) msgs.push(`Max thickness ${fmtLen(params.lithoMax)} is above ${fmtLen(4)}: the darkest areas will look solid black and lose detail.`);
+    if (params.lithoMax - params.lithoMin < 1.5)
+      msgs.push(`Only ${fmtLen(Math.max(0, params.lithoMax - params.lithoMin))} between min and max thickness: the picture will look flat. About ${fmtLen(2)} or more works best.`);
+  }
+  box.textContent = msgs.join('\n');
+  box.style.whiteSpace = 'pre-line';
+  box.hidden = msgs.length === 0;
 }
 
 function curveRadius(widthMm: number): number {

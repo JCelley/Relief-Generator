@@ -27,8 +27,8 @@ Set **Make** to **Lithophane (3D print)**. Instead of a carved shape, the tool m
 
 | Setting | Default | What it does |
 |---|---|---|
-| Max thickness | 3 mm | Thickness of the darkest areas. |
-| Min thickness | 0.8 mm | Thickness of the lightest areas. Thinner is brighter but can print with holes. |
+| Max thickness | 3 mm | Thickness of the darkest areas. 2.5–4 mm for white PLA; above 4 mm shadows go solid and lose detail. Lower it if the print is too dark. |
+| Min thickness | 0.8 mm | Thickness of the lightest areas. 0.6–0.8 mm with a 0.4 mm nozzle; below 0.6 mm it can break or print with pinholes. Raise it if highlights look washed out. |
 | Midtone darkness | 1 | Above 1 makes midtones thicker (darker when lit), below 1 lighter. |
 | Shape | Flat | **Curved (arc)** bends the plate around a vertical axis: picture on the outside, light goes inside, and it stands on its own. |
 | Radius | 80 mm | Curved only: radius of the inside face. Smaller = more curved. The width is measured along the curve; the info box shows the arc angle and footprint. Radii so small the ends would touch are raised automatically. |
@@ -37,7 +37,9 @@ Set **Make** to **Lithophane (3D print)**. Instead of a carved shape, the tool m
 
 The 3D view switches to a **Backlit** finish that simulates light shining through; pick Clay to see the geometry. Export is STL only. Flat: back at Z = 0, picture side up. Curved: exported standing up (bottom edge at Z = 0), ready to print upright.
 
-**Printing tips:** white PLA, 100 % infill, 0.1–0.12 mm layers. Print it standing upright (picture edge on the bed, with a brim) for the smoothest result, or flat with the picture side up.
+The panel warns when min thickness is under 0.6 mm, max is over 4 mm, or the two are less than 1.5 mm apart.
+
+**Printing tips** (also in the app under *Printing tips*): plain white or natural PLA (heavily pigmented bright white can block light; coloured and silk filaments wash out the picture), 100 % infill, 0.12–0.16 mm layers, slow outer walls, printed upright on its bottom edge with a brim. Light it with a white LED of roughly 300–600 lumens a few centimetres behind. Print a small test piece (about 2" wide) first to check your filament.
 
 ## Parameters
 

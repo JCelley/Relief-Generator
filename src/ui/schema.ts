@@ -8,8 +8,8 @@ export type Field =
 /** `length: true` fields are lengths in mm and follow the mm/inch toggle. */
 export const FIELDS: Field[] = [
   // lithophane (3D print)
-  { key: 'lithoMax', label: 'Max thickness', kind: 'range', min: 1, max: 8, step: 0.1, unit: 'mm', length: true, litho: true, help: 'Thickness of the darkest areas. 3 mm is typical for white PLA.' },
-  { key: 'lithoMin', label: 'Min thickness', kind: 'range', min: 0.3, max: 3, step: 0.05, unit: 'mm', length: true, litho: true, help: 'Thickness of the lightest areas. 0.6–0.8 mm; thinner lets more light through but may print with holes.' },
+  { key: 'lithoMax', label: 'Max thickness', kind: 'range', min: 1.5, max: 6, step: 0.1, unit: 'mm', length: true, litho: true, help: 'Thickness of the darkest areas. 2.5–4 mm for white PLA, 3 mm is typical. Above 4 mm the shadows go solid black and lose detail. If the whole print looks too dark, lower this (e.g. 2.6 mm).' },
+  { key: 'lithoMin', label: 'Min thickness', kind: 'range', min: 0.4, max: 2, step: 0.05, unit: 'mm', length: true, litho: true, help: 'Thickness of the lightest areas. 0.6–0.8 mm with a 0.4 mm nozzle. Thinner is brighter but can break or print with pinholes; if highlights look washed out, raise it a little (0.8 → 1.0 mm).' },
   { key: 'lithoGamma', label: 'Midtone darkness', kind: 'range', min: 0.3, max: 3, step: 0.05, litho: true, help: 'Above 1 makes midtones thicker (darker when lit); below 1 makes them lighter.' },
   {
     key: 'lithoShape',
