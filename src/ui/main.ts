@@ -179,7 +179,28 @@ function updateDims() {
 }
 
 let debounce = 0;
+/** shows the Reset button when a slider no longer matches the selected preset */
+function updatePresetModified() {
+  const name = ($('preset') as HTMLSelectElement).value as PresetName;
+  const preset = PRESETS[name] as Record<string, unknown>;
+  const cur = params as unknown as Record<string, unknown>;
+  const modified = Object.keys(preset).some((k) => {
+    const a = cur[k], b = preset[k];
+    return typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) > 1e-6 : a !== b;
+  });
+  $('presetModRow').hidden = !modified;
+}
+
+function applyPreset() {
+  const name = ($('preset') as HTMLSelectElement).value as PresetName;
+  // presets change the "look" only; size, machining and tool settings are kept
+  params = { ...params, ...PRESETS[name] };
+  syncInputs();
+  onParamsChanged();
+}
+
 function onParamsChanged() {
+  updatePresetModified();
   persist();
   if (!haveInputs) return;
   clearTimeout(debounce);
@@ -424,13 +445,9 @@ if (saved.maskModel) ($('maskModel') as HTMLSelectElement).value = saved.maskMod
 if (saved.device) ($('deviceSel') as HTMLSelectElement).value = saved.device;
 syncInputs();
 
-$('preset').addEventListener('change', () => {
-  const name = ($('preset') as HTMLSelectElement).value as PresetName;
-  // presets change the "look" only; size, machining and tool settings are kept
-  params = { ...params, ...PRESETS[name] };
-  syncInputs();
-  onParamsChanged();
-});
+$('preset').addEventListener('change', applyPreset);
+$('presetReset').addEventListener('click', applyPreset);
+updatePresetModified();
 $('units').addEventListener('change', () => {
   units = ($('units') as HTMLSelectElement).value as Units;
   syncInputs();
