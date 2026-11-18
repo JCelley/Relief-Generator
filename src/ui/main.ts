@@ -447,6 +447,12 @@ syncInputs();
 
 $('preset').addEventListener('change', applyPreset);
 $('presetReset').addEventListener('click', applyPreset);
+$('resetAll').addEventListener('click', () => {
+  // back to factory settings + the selected preset; keep the part size and stock the user chose
+  const { widthMm, reliefHeight, baseThickness } = params;
+  params = { ...DEFAULT_PARAMS, widthMm, reliefHeight, baseThickness };
+  applyPreset();
+});
 updatePresetModified();
 $('units').addEventListener('change', () => {
   units = ($('units') as HTMLSelectElement).value as Units;
