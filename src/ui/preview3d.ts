@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-export type Finish = 'clay' | 'wood' | 'aluminum';
+import { backlitBrightness } from '../core/litho';
 
-const FINISHES: Record<Finish, { color: number; roughness: number; metalness: number }> = {
+export type Finish = 'clay' | 'wood' | 'aluminum' | 'backlit';
+
+const FINISHES: Record<Exclude<Finish, 'backlit'>, { color: number; roughness: number; metalness: number }> = {
   clay: { color: 0xd9d4cc, roughness: 0.95, metalness: 0 },
   wood: { color: 0xc8a175, roughness: 0.85, metalness: 0 },
   aluminum: { color: 0xc4c8cc, roughness: 0.45, metalness: 0.85 },
@@ -23,6 +25,11 @@ export class ReliefPreview {
   private mesh: THREE.Mesh | null = null;
   private skirt: THREE.Mesh | null = null;
   private material = new THREE.MeshStandardMaterial({ ...FINISHES.clay, flatShading: false });
+  /** lithophane view: light shining through the plate, brightness from the thickness */
+  private backlitMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+  private edgeMat = new THREE.MeshBasicMaterial({ color: 0x2a2620 });
+  private finish: Finish = 'clay';
+  private lastZ: { z: Float32Array; nx: number; ny: number } | null = null;
   private size = { w: 100, h: 100 };
   private azimuth = 135;
   private elevation = 25;
@@ -54,10 +61,50 @@ export class ReliefPreview {
   }
 
   setFinish(f: Finish) {
-    this.material.color.setHex(FINISHES[f].color);
-    this.material.roughness = FINISHES[f].roughness;
-    this.material.metalness = FINISHES[f].metalness;
+    this.finish = f;
+    if (f !== 'backlit') {
+      this.material.color.setHex(FINISHES[f].color);
+      this.material.roughness = FINISHES[f].roughness;
+      this.material.metalness = FINISHES[f].metalness;
+    }
+    this.applyMaterials();
     this.requestRender();
+  }
+
+  private applyMaterials() {
+    const lit = this.finish === 'backlit';
+    if (this.mesh) {
+      if (lit) this.updateBacklitColors();
+      this.mesh.material = lit ? this.backlitMat : this.material;
+    }
+    if (this.skirt) this.skirt.material = lit ? this.edgeMat : this.material;
+    this.scene.background = new THREE.Color(lit ? 0x0c0c0d : 0x1b1c1e);
+  }
+
+  private updateBacklitColors() {
+    if (!this.mesh || !this.lastZ) return;
+    const { z, nx, ny } = this.lastZ;
+    let lo = Infinity, hi = -Infinity;
+    for (const v of z) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    const geom = this.mesh.geometry as THREE.BufferGeometry;
+    const n = nx * ny;
+    let col = geom.getAttribute('color') as THREE.BufferAttribute | undefined;
+    if (!col || col.count !== n) {
+      col = new THREE.BufferAttribute(new Float32Array(n * 3), 3);
+      geom.setAttribute('color', col);
+    }
+    // warm white light through white PLA
+    for (let iy = 0; iy < ny; iy++) {
+      const j = ny - 1 - iy;
+      for (let ix = 0; ix < nx; ix++) {
+        const b = backlitBrightness(z[j * nx + ix], lo, hi);
+        col.setXYZ(iy * nx + ix, b, b * 0.93, b * 0.8);
+      }
+    }
+    col.needsUpdate = true;
   }
 
   setLight(azimuthDeg: number, elevationDeg: number) {
@@ -99,6 +146,8 @@ export class ReliefPreview {
     geom.computeVertexNormals();
     geom.computeBoundingSphere();
     this.updateSkirt(z, nx, ny, widthMm, heightMm);
+    this.lastZ = { z: new Float32Array(z), nx, ny };
+    this.applyMaterials();
     this.placeLight();
     if (sizeChanged) this.resetView();
     this.requestRender();

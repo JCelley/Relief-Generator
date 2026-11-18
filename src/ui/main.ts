@@ -8,6 +8,7 @@ import { FIELDS, Field } from './schema';
 import { maskQuality } from '../core/maskQuality';
 import { MASK_MODELS } from '../models/infer';
 import { ReliefPreview, Finish } from './preview3d';
+import { backlitBrightness } from '../core/litho';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const MM_PER_IN = 25.4;
@@ -148,16 +149,23 @@ function syncOutputs() {
     if (f.key === 'gridSpacing' && v === 0) out.textContent = `auto ${fmtLen(params.toolDiameter / 4)}`;
     else out.textContent = f.length ? fmtLen(v) : String(Number(v.toFixed(4)));
   }
-  // show only the controls that matter for the current method / bg mode
+  // show only the controls that matter for the current mode / method / bg mode
+  const litho = params.mode === 'lithophane';
   const vis = (k: keyof ReliefParams, on: boolean) => {
     const e = inputs.get(k);
     if (e) (e.input.parentElement as HTMLElement).style.display = on ? '' : 'none';
   };
-  vis('bgLevel', params.bgMode === 'keep');
-  vis('baseGamma', params.method === 'baseDetail');
-  vis('gradThreshold', params.method === 'gradient');
-  vis('toneDarkUp', params.toneDepth > 0);
-  vis('toneScale', params.toneDepth > 0);
+  for (const { f } of inputs.values()) vis(f.key, Boolean(f.litho) === litho);
+  if (!litho) {
+    vis('bgLevel', params.bgMode === 'keep');
+    vis('baseGamma', params.method === 'baseDetail');
+    vis('gradThreshold', params.method === 'gradient');
+    vis('toneDarkUp', params.toneDepth > 0);
+    vis('toneScale', params.toneDepth > 0);
+  }
+  $('presetRow').hidden = litho;
+  ($('mode') as HTMLSelectElement).value = params.mode;
+  $('reliefCap').textContent = litho ? 'backlit' : 'relief';
   updateDims();
 }
 
@@ -188,7 +196,7 @@ function updatePresetModified() {
     const a = cur[k], b = preset[k];
     return typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) > 1e-6 : a !== b;
   });
-  $('presetModRow').hidden = !modified;
+  $('presetModRow').hidden = !modified || params.mode === 'lithophane';
 }
 
 function applyPreset() {
@@ -256,13 +264,18 @@ function drawRelief(z: Float32Array, nx: number, ny: number, stats: ReliefStats)
   for (let j = 0; j < ny; j++) img.data.set(z.subarray(j * nx, (j + 1) * nx), (ny - 1 - j) * nx);
   const az = Number(($('lightAz') as HTMLInputElement).value);
   const el = Number(($('lightEl') as HTMLInputElement).value);
-  const gray = shadeHeightfield(img, { pixelMm: stats.dx, azimuth: az, elevation: el });
+  const gray =
+    params.mode === 'lithophane'
+      ? Uint8ClampedArray.from(img.data, (t) => 255 * backlitBrightness(t, stats.zMin, stats.zMax))
+      : shadeHeightfield(img, { pixelMm: stats.dx, azimuth: az, elevation: el });
   drawGray($<HTMLCanvasElement>('cvRelief'), nx, ny, (i) => gray[i]);
 }
 
 // ---- photo loading -------------------------------------------------------------------------------
 function setExportsEnabled(on: boolean) {
-  for (const id of ['expSurface', 'expSolid', 'expStl']) ($(id) as HTMLButtonElement).disabled = !on;
+  // STEP is for CAM; a lithophane goes to the slicer as STL
+  const litho = params.mode === 'lithophane';
+  for (const id of ['expSurface', 'expSolid', 'expStl']) ($(id) as HTMLButtonElement).disabled = !on || (litho && id !== 'expStl');
 }
 
 // ---- mask sanity check --------------------------------------------------------------------------
@@ -275,7 +288,7 @@ function showMaskWarning(mask: Grid | null = lastMask) {
   const box = $('maskWarn');
   box.hidden = true;
   lastMask = mask;
-  if (!mask || usedMaskModel === 'none') return;
+  if (!mask || usedMaskModel === 'none' || params.mode === 'lithophane') return;
   // keeping the whole background at full height (Landscape) does not depend on the mask
   if (params.bgMode === 'keep' && params.bgLevel >= 0.9) return;
   if (!lastQuality || lastQuality.thr !== params.maskThreshold) lastQuality = { thr: params.maskThreshold, q: maskQuality(mask, params.maskThreshold) };
@@ -444,13 +457,28 @@ if (saved.preset) ($('preset') as HTMLSelectElement).value = saved.preset;
 if (saved.maskModel) ($('maskModel') as HTMLSelectElement).value = saved.maskModel;
 if (saved.device) ($('deviceSel') as HTMLSelectElement).value = saved.device;
 syncInputs();
+if (params.mode === 'lithophane') {
+  ($('finish') as HTMLSelectElement).value = 'backlit';
+  preview.setFinish('backlit');
+}
 
 $('preset').addEventListener('change', applyPreset);
 $('presetReset').addEventListener('click', applyPreset);
+$('mode').addEventListener('change', () => {
+  params.mode = ($('mode') as HTMLSelectElement).value as ReliefParams['mode'];
+  const fin = $('finish') as HTMLSelectElement;
+  // show a lithophane with light behind it; a relief with raking light
+  if (params.mode === 'lithophane') fin.value = 'backlit';
+  else if (fin.value === 'backlit') fin.value = 'clay';
+  preview.setFinish(fin.value as Finish);
+  syncOutputs();
+  setExportsEnabled(Boolean(lastStats));
+  onParamsChanged();
+});
 $('resetAll').addEventListener('click', () => {
   // back to factory settings + the selected preset; keep the part size and stock the user chose
-  const { widthMm, reliefHeight, baseThickness } = params;
-  params = { ...DEFAULT_PARAMS, widthMm, reliefHeight, baseThickness };
+  const { mode, widthMm, reliefHeight, baseThickness } = params;
+  params = { ...DEFAULT_PARAMS, mode, widthMm, reliefHeight, baseThickness };
   applyPreset();
 });
 updatePresetModified();

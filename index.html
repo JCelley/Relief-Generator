@@ -66,7 +66,14 @@
 
         <section>
           <h2>Relief</h2>
-          <div class="row">
+          <div class="row" title="CNC relief: carved shape from the photo's depth. Lithophane: thin plate for 3D printing; thickness follows the photo's darkness, so it shows the picture when lit from behind.">
+            <label for="mode">Make</label>
+            <select id="mode">
+              <option value="relief">CNC relief</option>
+              <option value="lithophane">Lithophane (3D print)</option>
+            </select>
+          </div>
+          <div class="row" id="presetRow">
             <label for="preset">Preset</label>
             <select id="preset">
               <option value="portrait">Portrait</option>
@@ -107,7 +114,7 @@
           <figure><canvas id="cvPhoto"></canvas><figcaption>original</figcaption></figure>
           <figure><canvas id="cvMask"></canvas><figcaption>mask</figcaption></figure>
           <figure><canvas id="cvDepth"></canvas><figcaption>depth</figcaption></figure>
-          <figure><canvas id="cvRelief"></canvas><figcaption>relief</figcaption></figure>
+          <figure><canvas id="cvRelief"></canvas><figcaption id="reliefCap">relief</figcaption></figure>
         </div>
         <div id="viewer">
           <div id="three"></div>
@@ -121,6 +128,7 @@
                   <option value="clay">Clay</option>
                   <option value="wood">Wood</option>
                   <option value="aluminum">Aluminum</option>
+                  <option value="backlit">Backlit</option>
                 </select>
               </label>
               <button id="resetView" class="small">Reset view</button>

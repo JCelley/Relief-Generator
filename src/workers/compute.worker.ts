@@ -4,6 +4,7 @@ import { toMachiningGrid, MachGrid } from '../core/resample';
 import { fitSurface } from '../core/bspline';
 import { writeStep } from '../core/step';
 import { writeStl } from '../core/stl';
+import { lithophaneGrid } from '../core/litho';
 import type { ReliefParams } from '../core/params';
 import type { ComputeRequest, ComputeResponse } from './protocol';
 
@@ -28,6 +29,12 @@ function machFor(p: ReliefParams): { mach: MachGrid; ms: number; iterations?: nu
   const key = JSON.stringify(p);
   if (last && last.key === key) return { mach: last.mach, ms: 0 };
   const t0 = performance.now();
+  if (p.mode === 'lithophane') {
+    if (!raw) throw new Error('no photo loaded');
+    const mach = lithophaneGrid(raw.luminance, p);
+    last = { key, mach };
+    return { mach, ms: performance.now() - t0 };
+  }
   const pr = getPrepared(p);
   const r = computeRelief(pr, p);
   const mach = toMachiningGrid(r.height, p);

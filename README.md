@@ -21,6 +21,22 @@ photo ─► subject mask ─► depth (Depth Anything V2 Small) ─► relief c
 
 Units in the files are mm. The bottom of the part is Z = 0, the base top is at Z = base thickness, and the highest point is at base + relief height. X/Y run from 0 to width/height, with the image's bottom-left corner at the origin.
 
+## Lithophanes (3D printing)
+
+Set **Make** to **Lithophane (3D print)**. Instead of a carved shape, the tool makes a thin plate whose thickness follows the photo's darkness: dark areas print thick, light areas thin, so the picture appears when the plate is lit from behind. Depth and the subject mask are not used.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Max thickness | 3 mm | Thickness of the darkest areas. |
+| Min thickness | 0.8 mm | Thickness of the lightest areas. Thinner is brighter but can print with holes. |
+| Midtone darkness | 1 | Above 1 makes midtones thicker (darker when lit), below 1 lighter. |
+| Frame | 3 mm | Solid full-thickness border; stiffens the plate. 0 = none. |
+| Mesh resolution (Advanced) | 0.2 mm | STL point spacing, about half the nozzle diameter. |
+
+The 3D view switches to a **Backlit** finish that simulates light shining through; pick Clay to see the geometry. Export is STL only (flat back at Z = 0, picture side up).
+
+**Printing tips:** white PLA, 100 % infill, 0.1–0.12 mm layers. Print it standing upright (picture edge on the bed, with a brim) for the smoothest result, or flat with the picture side up.
+
 ## Parameters
 
 | Parameter | What it does |

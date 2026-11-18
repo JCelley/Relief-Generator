@@ -6,9 +6,12 @@ import illustration from '../../presets/illustration.json';
 
 export type CompressionMethod = 'baseDetail' | 'gradient';
 export type BgMode = 'flat' | 'keep';
+export type OutputMode = 'relief' | 'lithophane';
 
 /** Every tunable knob. Lengths are millimetres unless noted. */
 export interface ReliefParams {
+  /** what to make: a CNC relief from depth, or a backlit 3D-print lithophane from brightness */
+  mode: OutputMode;
   /** overall width of the relief (mm); height follows the image aspect */
   widthMm: number;
   /** total Z range of the relief above the base (mm) */
@@ -59,9 +62,21 @@ export interface ReliefParams {
   gridSpacing: number;
   /** B-spline approximation tolerance (mm) */
   fitTolerance: number;
+
+  /** lithophane: thickness of the lightest areas (mm) */
+  lithoMin: number;
+  /** lithophane: thickness of the darkest areas (mm) */
+  lithoMax: number;
+  /** lithophane: solid frame around the picture at full thickness (mm), 0 = none */
+  lithoBorder: number;
+  /** lithophane: mesh spacing (mm); about half the nozzle diameter */
+  lithoGrid: number;
+  /** lithophane: >1 darkens the midtones (thicker), <1 lightens them */
+  lithoGamma: number;
 }
 
 export const DEFAULT_PARAMS: ReliefParams = {
+  mode: 'relief',
   widthMm: 152.4,
   reliefHeight: 6,
   baseThickness: 3,
@@ -86,6 +101,11 @@ export const DEFAULT_PARAMS: ReliefParams = {
   toolDiameter: 1.5875,
   gridSpacing: 0,
   fitTolerance: 0.01,
+  lithoMin: 0.8,
+  lithoMax: 3.0,
+  lithoBorder: 3,
+  lithoGrid: 0.2,
+  lithoGamma: 1,
 };
 
 export type PresetName = 'portrait' | 'pet' | 'object' | 'landscape' | 'illustration';
