@@ -210,21 +210,30 @@ footprint ${fmtLen(chord)} × ${fmtLen(depth)}, ${fmtLen(s.heightMm)} tall`;
 
 let debounce = 0;
 /** shows the Reset button when a slider no longer matches the selected preset */
+/** lithophane sliders the Reset button restores (the Shape choice is kept) */
+const LITHO_SLIDERS = ['lithoMax', 'lithoMin', 'lithoGamma', 'lithoRadius', 'lithoBorder', 'lithoGrid'] as const;
+
+/** values Reset goes back to: the selected preset (relief) or the lithophane defaults */
+function resetTarget(): Partial<ReliefParams> {
+  if (params.mode === 'lithophane') return Object.fromEntries(LITHO_SLIDERS.map((k) => [k, DEFAULT_PARAMS[k]]));
+  return PRESETS[($('preset') as HTMLSelectElement).value as PresetName];
+}
+
+/** shows the Reset button when a slider no longer matches the preset (or the lithophane defaults) */
 function updatePresetModified() {
-  const name = ($('preset') as HTMLSelectElement).value as PresetName;
-  const preset = PRESETS[name] as Record<string, unknown>;
+  const target = resetTarget() as Record<string, unknown>;
   const cur = params as unknown as Record<string, unknown>;
-  const modified = Object.keys(preset).some((k) => {
-    const a = cur[k], b = preset[k];
+  const modified = Object.keys(target).some((k) => {
+    const a = cur[k], b = target[k];
     return typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) > 1e-6 : a !== b;
   });
-  $('presetModRow').hidden = !modified || params.mode === 'lithophane';
+  $('presetModText').textContent = params.mode === 'lithophane' ? 'Sliders changed from the defaults' : 'Sliders changed from the preset';
+  $('presetModRow').hidden = !modified;
 }
 
 function applyPreset() {
-  const name = ($('preset') as HTMLSelectElement).value as PresetName;
   // presets change the "look" only; size, machining and tool settings are kept
-  params = { ...params, ...PRESETS[name] };
+  params = { ...params, ...resetTarget() };
   syncInputs();
   onParamsChanged();
 }
