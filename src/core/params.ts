@@ -73,6 +73,15 @@ export interface ReliefParams {
   lithoGrid: number;
   /** lithophane: >1 darkens the midtones (thicker), <1 lightens them */
   lithoGamma: number;
+  /** lithophane: flat plate or bent into an arc (picture outside, light inside) */
+  lithoShape: 'flat' | 'curved';
+  /** curved lithophane: radius of the inside (back) face, mm */
+  lithoRadius: number;
+}
+
+/** Smallest radius that still leaves a gap between the two ends of a curved lithophane (~340° arc). */
+export function minLithoRadius(widthMm: number): number {
+  return widthMm / (1.9 * Math.PI);
 }
 
 export const DEFAULT_PARAMS: ReliefParams = {
@@ -106,6 +115,8 @@ export const DEFAULT_PARAMS: ReliefParams = {
   lithoBorder: 3,
   lithoGrid: 0.2,
   lithoGamma: 1,
+  lithoShape: 'flat',
+  lithoRadius: 80,
 };
 
 export type PresetName = 'portrait' | 'pet' | 'object' | 'landscape' | 'illustration';

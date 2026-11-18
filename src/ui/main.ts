@@ -1,4 +1,4 @@
-import { DEFAULT_PARAMS, PRESETS, PresetName, ReliefParams } from '../core/params';
+import { DEFAULT_PARAMS, PRESETS, PresetName, ReliefParams, minLithoRadius } from '../core/params';
 import { shadeHeightfield } from '../core/shade';
 import type { Grid } from '../core/grid';
 import type { RawInputs } from '../core/relief';
@@ -162,7 +162,7 @@ function syncOutputs() {
     vis('gradThreshold', params.method === 'gradient');
     vis('toneDarkUp', params.toneDepth > 0);
     vis('toneScale', params.toneDepth > 0);
-  }
+  } else vis('lithoRadius', params.lithoShape === 'curved');
   $('presetRow').hidden = litho;
   ($('mode') as HTMLSelectElement).value = params.mode;
   $('reliefCap').textContent = litho ? 'backlit' : 'relief';
@@ -183,7 +183,29 @@ function updateDims() {
     `W × H  ${s.widthMm.toFixed(1)} × ${s.heightMm.toFixed(1)} mm  (${(s.widthMm / MM_PER_IN).toFixed(2)} × ${(s.heightMm / MM_PER_IN).toFixed(2)} in)\n` +
     `Z min  ${both(s.zMin)}\nZ max  ${both(s.zMax)}\n` +
     `grid   ${s.nx} × ${s.ny} @ ${s.dx.toFixed(3)} mm` +
-    (s.ms ? `   (${Math.round(s.ms)} ms)` : '');
+    (s.ms ? `   (${Math.round(s.ms)} ms)` : '') +
+    curvedInfo(s);
+}
+
+function curveRadius(widthMm: number): number {
+  if (params.mode !== 'lithophane' || params.lithoShape !== 'curved') return 0;
+  return Math.max(params.lithoRadius, minLithoRadius(widthMm));
+}
+
+/** footprint of a curved lithophane standing up: chord across the ends and depth of the arc */
+function curvedInfo(s: ReliefStats): string {
+  const R = curveRadius(s.widthMm);
+  if (!R) return '';
+  const th = s.widthMm / R;
+  const ro = R + s.zMax;
+  const half = Math.min(th / 2, Math.PI / 2);
+  const chord = 2 * ro * Math.sin(half);
+  const depth = ro - R * Math.cos(th / 2);
+  const deg = (th * 180) / Math.PI;
+  const clamped = R > params.lithoRadius ? ' (radius raised: the ends would touch)' : '';
+  return `
+curved R ${fmtLen(R)}, ${deg.toFixed(0)}° arc${clamped}
+footprint ${fmtLen(chord)} × ${fmtLen(depth)}, ${fmtLen(s.heightMm)} tall`;
 }
 
 let debounce = 0;
@@ -406,7 +428,7 @@ computeWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
   if (m.type === 'relief') {
     busy = false;
     lastStats = m.stats;
-    preview.setHeightfield(m.z, m.nx, m.ny, m.stats.widthMm, m.stats.heightMm);
+    preview.setHeightfield(m.z, m.nx, m.ny, m.stats.widthMm, m.stats.heightMm, curveRadius(m.stats.widthMm));
     drawRelief(m.z, m.nx, m.ny, m.stats);
     updateDims();
     setExportsEnabled(true);

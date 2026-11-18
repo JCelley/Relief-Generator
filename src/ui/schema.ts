@@ -11,6 +11,18 @@ export const FIELDS: Field[] = [
   { key: 'lithoMax', label: 'Max thickness', kind: 'range', min: 1, max: 8, step: 0.1, unit: 'mm', length: true, litho: true, help: 'Thickness of the darkest areas. 3 mm is typical for white PLA.' },
   { key: 'lithoMin', label: 'Min thickness', kind: 'range', min: 0.3, max: 3, step: 0.05, unit: 'mm', length: true, litho: true, help: 'Thickness of the lightest areas. 0.6–0.8 mm; thinner lets more light through but may print with holes.' },
   { key: 'lithoGamma', label: 'Midtone darkness', kind: 'range', min: 0.3, max: 3, step: 0.05, litho: true, help: 'Above 1 makes midtones thicker (darker when lit); below 1 makes them lighter.' },
+  {
+    key: 'lithoShape',
+    label: 'Shape',
+    kind: 'select',
+    options: [
+      ['flat', 'Flat'],
+      ['curved', 'Curved (arc)'],
+    ],
+    litho: true,
+    help: 'Curved: bent into an arc with the picture outside, so it stands on its own with a light inside. Print it standing up.',
+  },
+  { key: 'lithoRadius', label: 'Radius', kind: 'range', min: 15, max: 400, step: 1, unit: 'mm', length: true, litho: true, help: 'Radius of the inside of the arc. Smaller = more curved. The width is measured along the curve.' },
   { key: 'lithoBorder', label: 'Frame', kind: 'range', min: 0, max: 15, step: 0.5, unit: 'mm', length: true, litho: true, help: 'Solid border at full thickness around the picture. Stiffens the plate. 0 = none.' },
   { key: 'lithoGrid', label: 'Mesh resolution', kind: 'range', min: 0.1, max: 1, step: 0.05, unit: 'mm', length: true, litho: true, advanced: true, help: 'Point spacing of the STL. About half the nozzle diameter (0.2 mm for a 0.4 mm nozzle). Smaller = bigger file.' },
   { key: 'reliefHeight', label: 'Relief height', kind: 'range', min: 0.5, max: 40, step: 0.1, unit: 'mm', length: true, help: 'Total Z range of the carving above the base.' },

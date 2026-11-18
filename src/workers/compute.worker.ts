@@ -3,7 +3,8 @@ import { prepare, computeRelief, Prepared, RawInputs } from '../core/relief';
 import { toMachiningGrid, MachGrid } from '../core/resample';
 import { fitSurface } from '../core/bspline';
 import { writeStep } from '../core/step';
-import { writeStl } from '../core/stl';
+import { writeStl, cylinderMap } from '../core/stl';
+import { minLithoRadius } from '../core/params';
 import { lithophaneGrid } from '../core/litho';
 import type { ReliefParams } from '../core/params';
 import type { ComputeRequest, ComputeResponse } from './protocol';
@@ -71,7 +72,9 @@ self.onmessage = (ev: MessageEvent<ComputeRequest>) => {
       const { mach } = machFor(req.params);
       const t0 = performance.now();
       if (req.kind === 'stl') {
-        const bytes = writeStl(mach);
+        const p = req.params;
+        const curved = p.mode === 'lithophane' && p.lithoShape === 'curved';
+        const bytes = writeStl(mach, curved ? cylinderMap(mach.widthMm, Math.max(p.lithoRadius, minLithoRadius(mach.widthMm))) : undefined);
         post({ type: 'exported', id: req.id, kind: 'stl', bytes, info: `${((bytes.length - 84) / 50).toLocaleString()} triangles` }, [bytes.buffer]);
         return;
       }

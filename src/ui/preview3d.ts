@@ -122,8 +122,12 @@ export class ReliefPreview {
     this.light.target.position.set(0, 0, 0);
   }
 
-  /** z: CAD-oriented heightfield (row 0 = bottom edge), in mm. */
-  setHeightfield(z: Float32Array, nx: number, ny: number, widthMm: number, heightMm: number) {
+  /**
+   * z: CAD-oriented heightfield (row 0 = bottom edge), in mm.
+   * bendRadius > 0 shows the part bent around a vertical axis (curved lithophane): the back on a
+   * cylinder of that radius, the picture side outward, facing the camera.
+   */
+  setHeightfield(z: Float32Array, nx: number, ny: number, widthMm: number, heightMm: number, bendRadius = 0) {
     const sizeChanged = Math.abs(widthMm - this.size.w) > 1e-6 || Math.abs(heightMm - this.size.h) > 1e-6;
     this.size = { w: widthMm, h: heightMm };
     let geom = this.mesh?.geometry as THREE.PlaneGeometry | undefined;
@@ -137,15 +141,20 @@ export class ReliefPreview {
       } else this.mesh.geometry = geom;
     }
     const pos = geom.attributes.position as THREE.BufferAttribute;
+    const map = this.bendMap(bendRadius);
     // PlaneGeometry rows go from top (iy=0) to bottom
     for (let iy = 0; iy < ny; iy++) {
       const j = ny - 1 - iy;
-      for (let ix = 0; ix < nx; ix++) pos.setZ(iy * nx + ix, z[j * nx + ix]);
+      const y = heightMm / 2 - (iy * heightMm) / (ny - 1);
+      for (let ix = 0; ix < nx; ix++) {
+        const [X, Y, Z] = map(-widthMm / 2 + (ix * widthMm) / (nx - 1), y, z[j * nx + ix]);
+        pos.setXYZ(iy * nx + ix, X, Y, Z);
+      }
     }
     pos.needsUpdate = true;
     geom.computeVertexNormals();
     geom.computeBoundingSphere();
-    this.updateSkirt(z, nx, ny, widthMm, heightMm);
+    this.updateSkirt(z, nx, ny, widthMm, heightMm, map);
     this.lastZ = { z: new Float32Array(z), nx, ny };
     this.applyMaterials();
     this.placeLight();
@@ -157,7 +166,24 @@ export class ReliefPreview {
    * Side walls (top edge of the relief straight down to Z = 0) and the flat bottom, so the
    * preview shows the full block, base thickness included, like the STEP solid and STL exports.
    */
-  private updateSkirt(z: Float32Array, nx: number, ny: number, W: number, H: number) {
+  /** (x, y centred on the part, h) → display coordinates; identity when flat */
+  private bendMap(R: number): (x: number, y: number, h: number) => [number, number, number] {
+    if (!(R > 0)) return (x, y, h) => [x, y, h];
+    return (x, y, h) => {
+      const th = x / R;
+      const r = R + h;
+      return [r * Math.sin(th), y, r * Math.cos(th) - R];
+    };
+  }
+
+  private updateSkirt(
+    z: Float32Array,
+    nx: number,
+    ny: number,
+    W: number,
+    H: number,
+    map: (x: number, y: number, h: number) => [number, number, number],
+  ) {
     const X = (i: number) => -W / 2 + (i * W) / (nx - 1);
     const Y = (j: number) => -H / 2 + (j * H) / (ny - 1);
     // boundary loop counter-clockwise seen from above: bottom edge, right, top, left
@@ -166,13 +192,14 @@ export class ReliefPreview {
     for (let j = 0; j < ny - 1; j++) loop.push([nx - 1, j]);
     for (let i = nx - 1; i > 0; i--) loop.push([i, ny - 1]);
     for (let j = ny - 1; j > 0; j--) loop.push([0, j]);
-    const tris = loop.length * 2 + 2;
+    const tris = loop.length * 2 + (nx - 1) * 2;
     const p = new Float32Array(tris * 9);
     let o = 0;
     const v = (x: number, y: number, h: number) => {
-      p[o++] = x;
-      p[o++] = y;
-      p[o++] = h;
+      const q = map(x, y, h);
+      p[o++] = q[0];
+      p[o++] = q[1];
+      p[o++] = q[2];
     };
     for (let k = 0; k < loop.length; k++) {
       const [ai, aj] = loop[k];
@@ -183,9 +210,12 @@ export class ReliefPreview {
       v(ax, ay, 0); v(bx, by, 0); v(bx, by, bz);
       v(ax, ay, 0); v(bx, by, bz); v(ax, ay, az);
     }
-    // bottom (facing down)
-    v(-W / 2, -H / 2, 0); v(W / 2, H / 2, 0); v(W / 2, -H / 2, 0);
-    v(-W / 2, -H / 2, 0); v(-W / 2, H / 2, 0); v(W / 2, H / 2, 0);
+    // back (facing away), one strip per column so it follows a bend
+    for (let i = 0; i < nx - 1; i++) {
+      const a = X(i), b = X(i + 1);
+      v(a, -H / 2, 0); v(b, H / 2, 0); v(b, -H / 2, 0);
+      v(a, -H / 2, 0); v(a, H / 2, 0); v(b, H / 2, 0);
+    }
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(p, 3));
     geom.computeVertexNormals(); // non-indexed: flat normals per triangle
