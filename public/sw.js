@@ -16,9 +16,10 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // models: handled by transformers.js cache
   if (req.mode === 'navigate') {
-    // network first so updates show up, cache when offline
+    // network first, skipping the browser's HTTP cache (Pages sends max-age=600), so a new
+    // deploy shows up on the next refresh; cached copy when offline
     e.respondWith(
-      fetch(req)
+      fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' })
         .then((r) => {
           const copy = r.clone();
           caches.open(CACHE).then((c) => c.put(req, copy));
