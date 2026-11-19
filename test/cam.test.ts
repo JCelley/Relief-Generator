@@ -1,6 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { finishingPaths, roughingPaths, writeGcode, recommend, stepoverFor, scallopHeight, chipLoad, previewSegments } from '../src/core/cam';
-import { tipHeight } from '../src/core/cutter';
+import {
+  finishingPaths,
+  roughingPaths,
+  writeGcode,
+  recommend,
+  stepoverFor,
+  scallopHeight,
+  chipLoad,
+  previewSegments,
+  cutoutPath,
+  detailRegion,
+  detailPaths,
+  chipRatio,
+  toolRadiusAt,
+} from '../src/core/cam';
+import { tipHeight, simulateCut } from '../src/core/cutter';
 import type { MachGrid } from '../src/core/resample';
 
 // 40 × 30 mm part, 0.2 mm grid: 3 mm base with a 5 mm tall dome, top at 8 mm
@@ -14,13 +28,34 @@ for (let j = 0; j < ny; j++)
 const g: MachGrid = { nx, ny, dx, dy: dx, widthMm: 40, heightMm: 30, z, zMin: 3, zMax: 8 };
 const at = (a: Float32Array, x: number, y: number) => a[Math.round(y / dx) * nx + Math.round(x / dx)];
 
+/** replays G-code: [x, y, z (part coordinates), rapid?] for every move */
+function replay(text: string, zOff: number) {
+  let x = 0, y = 0, zz = 0, mode = '';
+  const out: [number, number, number, boolean][] = [];
+  for (const l of text.split('\n')) {
+    if (l.startsWith('(') || l.startsWith('G90') || !/[XYZ]/.test(l)) continue;
+    if (/\bG0\b/.test(l)) mode = 'G0';
+    if (/\bG1\b/.test(l)) mode = 'G1';
+    const v = (c: string, d: number) => {
+      const m = new RegExp(c + '(-?[\\d.]+)').exec(l);
+      return m ? Number(m[1]) : d;
+    };
+    x = v('X', x);
+    y = v('Y', y);
+    zz = v('Z', zz - zOff) + zOff;
+    out.push([x, y, zz, mode === 'G0']);
+  }
+  return out;
+}
+
 describe('finishing', () => {
   const tool = { type: 'ball' as const, diameter: 3.175, angle: 0 };
   const [p] = finishingPaths(g, { tool, stepover: 0.5, dir: 'x' });
   const tip = tipHeight(g, tool);
 
   it('rides on the surface without gouging and covers the part', () => {
-    let below = 0, ys = new Set<number>();
+    let below = 0;
+    const ys = new Set<number>();
     for (let k = 0; k < p.length; k += 3) {
       const x = p[k], y = p[k + 1], zz = p[k + 2];
       ys.add(Math.round(y * 100));
@@ -44,7 +79,7 @@ describe('finishing', () => {
 
 describe('roughing', () => {
   const tool = { type: 'flat' as const, diameter: 6.35, angle: 0 };
-  const paths = roughingPaths(g, { tool, stepdown: 2, stepover: 2.5, allowance: 0.5, stockTop: 8 });
+  const { paths, entry } = roughingPaths(g, { tool, stepdown: 2, stepover: 2.5, allowance: 0.5, stockTop: 8 });
   const tip = tipHeight(g, tool);
 
   it('stays clear of the design by the allowance, never deeper than one stepdown per level', () => {
@@ -58,40 +93,52 @@ describe('roughing', () => {
     // 8 → 6 → 4 → 3.5 (base + allowance)
     expect([...levels].sort((a, b) => b - a)).toEqual([6000, 4000, 3500]);
   });
+
+  it('enters each run from the level above', () => {
+    expect(entry.length).toBe(paths.length);
+    paths.forEach((p, i) => {
+      expect(entry[i]).toBeGreaterThanOrEqual(p[2] - 1e-6);
+      expect(entry[i] - p[2]).toBeLessThanOrEqual(2 + 1e-6);
+    });
+  });
+
+  it('thicker stock: starts at the stock top', () => {
+    const t = roughingPaths(g, { tool, stepdown: 2, stepover: 2.5, allowance: 0.5, stockTop: 12 });
+    let top = -Infinity;
+    for (const p of t.paths) for (let k = 2; k < p.length; k += 3) top = Math.max(top, p[k]);
+    expect(top).toBeCloseTo(10, 3);
+  });
 });
 
 describe('G-code', () => {
   const tool = { type: 'ball' as const, diameter: 3.175, angle: 0 };
   const paths = finishingPaths(g, { tool, stepover: 1, dir: 'xy' });
-  const tp = { name: 'finishing', tool, paths, rpm: 18000, feed: 1500, plunge: 500 };
+  const tp = { name: 'finishing', number: 2, tool, paths, rpm: 18000, feed: 1500, plunge: 500 };
 
-  it('mm, Z0 at the top: nothing below the part bottom, rapids only at the safe height', () => {
-    const r = writeGcode(tp, { units: 'mm', safeZ: 5, zZero: 'top', partTop: 8 });
+  it('mm, Z0 at the top: nothing below the part bottom, rapids across only at the safe height', () => {
+    const r = writeGcode(tp, { units: 'mm', safeZ: 5, zZero: 'top', stockTop: 8 });
     const lines = r.text.trim().split('\n');
     expect(lines).toContain('G21');
     expect(lines).toContain('M3 S18000');
     expect(lines[lines.length - 1]).toBe('M30');
-    let mode = '', zz = 0, minZ = Infinity, maxZ = -Infinity;
-    for (const l of lines) {
-      if (l.startsWith('(')) continue;
-      const g0 = /\bG0\b/.test(l), g1 = /\bG1\b/.test(l);
-      if (g0) mode = 'G0';
-      if (g1) mode = 'G1';
-      const m = /Z(-?[\d.]+)/.exec(l);
-      if (m) zz = Number(m[1]);
-      if (/[XY]/.test(l) && mode === 'G0' && !l.startsWith('G90')) expect(zz).toBeCloseTo(5, 3);
-      if (mode === 'G1') {
-        minZ = Math.min(minZ, zz);
-        maxZ = Math.max(maxZ, zz);
+    expect(r.text).not.toContain('M6');
+    let prev: [number, number, number, boolean] = [0, 0, 13, true];
+    let minZ = Infinity, maxZ = -Infinity;
+    for (const m of replay(r.text, 8)) {
+      if (m[3] && (Math.abs(m[0] - prev[0]) > 1e-6 || Math.abs(m[1] - prev[1]) > 1e-6)) expect(m[2]).toBeCloseTo(13, 3);
+      if (!m[3]) {
+        minZ = Math.min(minZ, m[2]);
+        maxZ = Math.max(maxZ, m[2]);
       }
+      prev = m;
     }
-    expect(minZ).toBeGreaterThanOrEqual(-5 - 1e-3); // never below the 3 mm base (8 − 3)
-    expect(maxZ).toBeLessThanOrEqual(1e-3);
+    expect(minZ).toBeGreaterThanOrEqual(3 - 1e-3); // never below the 3 mm base
+    expect(maxZ).toBeLessThanOrEqual(9 + 1e-3);
     expect(r.seconds).toBeGreaterThan(60);
   });
 
   it('inches: G20 and scaled values', () => {
-    const r = writeGcode(tp, { units: 'in', safeZ: 5, zZero: 'bottom', partTop: 8 });
+    const r = writeGcode(tp, { units: 'in', safeZ: 5, zZero: 'bottom', stockTop: 8 });
     expect(r.text).toContain('G20');
     expect(r.text).toContain('Z0.5118'); // safe height 13 mm above the bottom
     expect(r.text).toContain('F59.1'); // 1500 mm/min
@@ -99,6 +146,124 @@ describe('G-code', () => {
 
   it('preview segments come in pairs', () => {
     expect(previewSegments(paths, 13).length % 6).toBe(0);
+  });
+});
+
+describe('ramps and tool changes', () => {
+  const rt = { type: 'flat' as const, diameter: 6.35, angle: 0 };
+  const r = roughingPaths(g, { tool: rt, stepdown: 2, stepover: 2.5, allowance: 0.5, stockTop: 8 });
+  const rough = { name: 'roughing', number: 1, tool: rt, rpm: 18000, feed: 3000, plunge: 1000, ...r };
+  const ft = { type: 'ball' as const, diameter: 3.175, angle: 0 };
+  const fin = { name: 'finishing', number: 2, tool: ft, rpm: 18000, feed: 1500, plunge: 500, paths: finishingPaths(g, { tool: ft, stepover: 1, dir: 'x' }) };
+
+  it('rapids stop 1 mm above the material, then the tool ramps in', () => {
+    const res = writeGcode(rough, { units: 'mm', safeZ: 5, zZero: 'bottom', stockTop: 8, rampAngle: 5 });
+    const mv = replay(res.text, 0);
+    let prev = mv[0], steep = 0, lowRapid = Infinity;
+    for (const m of mv) {
+      const dz = prev[2] - m[2], dxy = Math.hypot(m[0] - prev[0], m[1] - prev[1]);
+      if (m[3]) lowRapid = Math.min(lowRapid, m[2]);
+      else if (dz > 1.05 && dz > dxy * Math.tan((6 * Math.PI) / 180)) steep++;
+      prev = m;
+    }
+    // the lowest level is 3.5 mm, entered from 4 mm: rapids never below 5 mm
+    expect(lowRapid).toBeGreaterThanOrEqual(5 - 1e-3);
+    // straight plunges only where a run is too short to ramp along
+    expect(steep).toBeLessThan(r.paths.length * 0.3);
+    // faster than ramping down from the stock top every time
+    const fromTop = writeGcode({ ...rough, entry: undefined }, { units: 'mm', safeZ: 5, zZero: 'bottom', stockTop: 8, rampAngle: 5 });
+    expect(res.seconds).toBeLessThan(fromTop.seconds);
+  });
+
+  it('one file with both tools: tool change, spindle restarts, re-zero note', () => {
+    const res = writeGcode([rough, fin], { units: 'mm', safeZ: 5, zZero: 'top', stockTop: 8, spindleDelay: 3, toolChange: 'm6' });
+    expect(res.text).toContain('T1 M6');
+    expect(res.text).toContain('T2 M6');
+    expect(res.text).toContain('TOOL CHANGE');
+    expect(res.text.match(/M3 S18000/g)?.length).toBe(2);
+    expect(res.text).toContain('G4 P3');
+    expect(res.ops.map((o) => o.name)).toEqual(['roughing', 'finishing']);
+    expect(Math.abs(res.ops[0].seconds + res.ops[1].seconds - res.seconds)).toBeLessThan(10);
+    const m0 = writeGcode([rough, fin], { units: 'mm', safeZ: 5, zZero: 'top', stockTop: 8, toolChange: 'm0' });
+    expect(m0.text).not.toContain('M6');
+    expect(m0.text.split('\n')).toContain('M0');
+  });
+});
+
+describe('cutout', () => {
+  const tool = { type: 'flat' as const, diameter: 6, angle: 0 };
+  const o = { tool, widthMm: 40, heightMm: 30, stockTop: 8, stepdown: 3, through: 0.3, tabs: 2, tabWidth: 5, tabHeight: 2, climb: true };
+  const p = cutoutPath(o);
+
+  it('goes round the part at the tool radius, down to just below it, over the tabs', () => {
+    let minZ = Infinity, maxZ = -Infinity, onTab = 0;
+    for (let k = 0; k < p.length; k += 3) {
+      const x = p[k], y = p[k + 1], zz = p[k + 2];
+      const ex = Math.max(-x, 0, x - 40), ey = Math.max(-y, 0, y - 30);
+      expect(Math.hypot(ex, ey)).toBeCloseTo(3, 1);
+      minZ = Math.min(minZ, zz);
+      maxZ = Math.max(maxZ, zz);
+      if (Math.abs(zz - 2) < 1e-6) onTab++;
+    }
+    expect(minZ).toBeCloseTo(-0.3, 5);
+    expect(maxZ).toBeCloseTo(8, 5);
+    expect(onTab).toBeGreaterThan(8);
+    // going down only gently, except straight down at the end of a tab
+    let slope = 0;
+    for (let k = 3; k < p.length; k += 3) {
+      const d = Math.hypot(p[k] - p[k - 3], p[k + 1] - p[k - 2]);
+      if (d > 1e-6 && p[k + 2] < p[k - 1]) slope = Math.max(slope, (p[k - 1] - p[k + 2]) / d);
+    }
+    expect(slope).toBeLessThan(0.05);
+  });
+
+  it('clockwise for climb, counter-clockwise for conventional', () => {
+    const area = (q: Float32Array) => {
+      let a = 0;
+      const n = q.length / 3;
+      for (let i = 0; i < n - 1; i++) a += q[i * 3] * q[i * 3 + 4] - q[i * 3 + 3] * q[i * 3 + 1];
+      return a;
+    };
+    expect(area(p)).toBeLessThan(0);
+    expect(area(cutoutPath({ ...o, climb: false }))).toBeGreaterThan(0);
+  });
+});
+
+describe('detail pass', () => {
+  // a 1 mm wide groove down to 1 mm: a 3.175 mm ball cannot get in, a 0.5 mm ball can
+  const z2 = new Float32Array(g.z);
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (Math.abs(i * dx - 10) <= 0.5) z2[j * nx + i] = 1;
+  const g2 = { ...g, z: z2, zMin: 1 };
+  const big = { type: 'ball' as const, diameter: 3.175, angle: 0 };
+  const small = { type: 'ball' as const, diameter: 0.5, angle: 0 };
+  const fc = simulateCut(g2, big).cut;
+  const d = detailRegion(g2, small, fc);
+
+  it('works only around what the finishing tool missed, and goes deeper', () => {
+    // the groove, and the soft crease where the dome meets the base; not the dome itself
+    const R = (x: number, y: number) => d.region[Math.round(y / dx) * nx + Math.round(x / dx)];
+    expect(R(10, 15)).toBe(1);
+    expect(R(20, 15)).toBe(0);
+    expect(R(26, 15)).toBe(0);
+    expect(d.area).toBeLessThan(30 * 8 + 2 * Math.PI * 12 * 3);
+    const r = detailPaths(g2, { tool: small, stepover: 0.5, dir: 'x', finishCut: fc, region: d.region });
+    // runs are linked with short hops over the finished surface
+    expect(r.link!.filter((h) => !Number.isNaN(h)).length).toBeGreaterThan(r.paths.length / 2);
+    const hops = writeGcode({ name: 'detail', number: 3, tool: small, rpm: 18000, feed: 900, plunge: 300, ...r }, { units: 'mm', safeZ: 5, zZero: 'bottom', stockTop: 8 });
+    for (const m of replay(hops.text, 0)) expect(m[2]).toBeGreaterThanOrEqual(0.99); // never below the groove floor
+    let low = Infinity;
+    for (const p of r.paths)
+      for (let k = 0; k < p.length; k += 3) {
+        expect(Math.hypot(p[k] - 20, p[k + 1] - 15)).toBeGreaterThan(8); // runs are joined over gaps up to 3 mm
+        low = Math.min(low, p[k + 2]);
+      }
+    expect(low).toBeLessThan(1.5);
+    r.paths.forEach((p, i) => expect(r.entry[i]).toBeGreaterThanOrEqual(p[2] - 1e-6));
+  });
+
+  it('tool width at a height', () => {
+    expect(toolRadiusAt(small, 1)).toBeCloseTo(0.25, 6);
+    expect(toolRadiusAt({ type: 'vbit', diameter: 0, angle: 90 }, 1)).toBeCloseTo(1, 3);
   });
 });
 
@@ -110,9 +275,22 @@ describe('feeds and stepover', () => {
   });
   it('1/4" 2-flute in hardwood at 18k rpm', () => {
     const r = recommend('hardwood', { type: 'flat', diameter: 6.35, angle: 0 }, 2, 'rough');
-    expect(r.feed).toBe(5000); // 8230 mm/min capped for a hobby router
+    // 8230 mm/min at 18k is too fast for a hobby router: 5000 mm/min, spindle slowed to keep the chip
+    expect(r.rpm).toBe(10900);
+    expect(Math.abs(r.feed - 5000)).toBeLessThanOrEqual(30);
     expect(r.stepdown).toBeCloseTo(3.18, 2);
     expect(r.stepover).toBeCloseTo(2.54, 2);
+  });
+  it('machine limits cap the recommendation', () => {
+    const r = recommend('hardwood', { type: 'flat', diameter: 6.35, angle: 0 }, 2, 'rough', { minRpm: 12000, maxRpm: 24000, maxFeed: 2500 });
+    expect(r.rpm).toBe(12000);
+    expect(r.feed).toBe(2500);
+  });
+  it('chip load check flags rubbing', () => {
+    const t = { type: 'flat' as const, diameter: 6.35, angle: 0 };
+    expect(chipRatio('hardwood', t, 2, 18000, 500, 'rough').ratio).toBeLessThan(0.5);
+    const rec = recommend('hardwood', t, 2, 'rough', { minRpm: 8000, maxRpm: 30000, maxFeed: 20000 });
+    expect(chipRatio('hardwood', t, 2, rec.rpm, rec.feed, 'rough').ratio).toBeCloseTo(1, 1);
   });
   it('finishing stepover and scallop', () => {
     const ball = { type: 'ball' as const, diameter: 3.175, angle: 0 };

@@ -15,6 +15,9 @@ const FINISHES: Record<Exclude<Finish, 'backlit'>, { color: number; roughness: n
  * Shaded 3D preview of the machining heightfield with a movable raking light.
  * Coordinates: x right, y up, z = height (mm); the part is centred on the origin.
  */
+/** toolpath colours: roughing orange, finishing blue, detail magenta, cutout green */
+const PATH_COLORS: Record<string, number> = { roughing: 0xf0a040, finishing: 0x4fb3ff, detail: 0xff5fd2, cutout: 0x6fe07a };
+
 export class ReliefPreview {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
@@ -166,31 +169,56 @@ export class ReliefPreview {
   }
 
   /**
-   * Draws toolpaths over the relief: line-segment vertex lists in part coordinates (x, y from the
-   * front-left corner, z above the bottom), or nulls to clear.
+   * Draws toolpaths over the relief (line-segment vertex lists in part coordinates: x, y from the
+   * front-left corner, z above the bottom), the stock as a wire box and the X0 Y0 Z0 origin as an
+   * axis marker (X red, Y green, Z blue). null clears them.
    */
-  setToolpaths(rough: Float32Array | null, finish: Float32Array | null) {
+  setToolpaths(ops: { name: string; segs: Float32Array }[] | null, job?: { stockTop: number; zeroZ: number }) {
     for (const l of this.pathLines) {
       this.scene.remove(l);
       l.geometry.dispose();
+      (l.material as THREE.Material).dispose();
     }
     this.pathLines = [];
-    const add = (v: Float32Array | null, color: number) => {
-      if (!v || !v.length) return;
+    const W = this.size.w, H = this.size.h;
+    const toScene = (v: ArrayLike<number>, lift = 0.02) => {
       const p = new Float32Array(v.length);
       for (let k = 0; k < v.length; k += 3) {
-        p[k] = v[k] - this.size.w / 2;
-        p[k + 1] = v[k + 1] - this.size.h / 2;
-        p[k + 2] = v[k + 2] + 0.02;
+        p[k] = v[k] - W / 2;
+        p[k + 1] = v[k + 1] - H / 2;
+        p[k + 2] = v[k + 2] + lift;
       }
+      return p;
+    };
+    const add = (pos: Float32Array, mat: THREE.LineBasicMaterial, colors?: Float32Array) => {
       const geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.BufferAttribute(p, 3));
-      const l = new THREE.LineSegments(geom, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.75 }));
+      geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      if (colors) geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      const l = new THREE.LineSegments(geom, mat);
       this.scene.add(l);
       this.pathLines.push(l);
     };
-    add(rough, 0xf0a040);
-    add(finish, 0x4fb3ff);
+    for (const o of ops ?? []) {
+      if (!o.segs.length) continue;
+      add(toScene(o.segs), new THREE.LineBasicMaterial({ color: PATH_COLORS[o.name] ?? 0xffffff, transparent: true, opacity: 0.75 }));
+    }
+    if (ops && job) {
+      // stock outline: the part footprint from the bottom to the stock top
+      const t = job.stockTop, box: number[] = [];
+      const c = [[0, 0], [W, 0], [W, H], [0, H]];
+      for (let i = 0; i < 4; i++) {
+        const [x0, y0] = c[i], [x1, y1] = c[(i + 1) % 4];
+        box.push(x0, y0, 0, x1, y1, 0, x0, y0, t, x1, y1, t, x0, y0, 0, x0, y0, t);
+      }
+      add(toScene(box, 0), new THREE.LineBasicMaterial({ color: 0x9aa0a8, transparent: true, opacity: 0.6 }));
+      const a = Math.max(5, Math.min(W, H) * 0.15), z0 = job.zeroZ;
+      add(
+        toScene([0, 0, z0, a, 0, z0, 0, 0, z0, 0, a, z0, 0, 0, z0, 0, 0, z0 + a], 0),
+        new THREE.LineBasicMaterial({ vertexColors: true, depthTest: false }),
+        new Float32Array([1, 0.2, 0.2, 1, 0.2, 0.2, 0.3, 1, 0.3, 0.3, 1, 0.3, 0.3, 0.5, 1, 0.3, 0.5, 1]),
+      );
+      this.pathLines[this.pathLines.length - 1].renderOrder = 10;
+    }
     this.requestRender();
   }
 

@@ -2,7 +2,7 @@
 
 Turn a **photograph** into a machinable **bas-relief** and export it as a **STEP B-spline surface** (or closed solid) that Fusion 360 CAM can toolpath directly, plus **STL** for 3D printing.
 
-Everything runs in the browser (WebGPU, with a WASM fallback). Photos never leave the machine. After the first load the app works offline. For a 3-axis router it can also write simple raster G-code directly (roughing + finishing); for anything more involved, use the STEP in Fusion.
+Everything runs in the browser (WebGPU, with a WASM fallback). Photos never leave the machine. After the first load the app works offline. For a 3-axis router it can also write raster G-code directly (roughing, finishing, a detail pass with a smaller tool, and a cutout with tabs) plus a printable setup sheet; for anything more involved, use the STEP in Fusion.
 
 ```
 photo ─► subject mask ─► depth (Depth Anything V2 Small) ─► relief compression ─► edge falloff
@@ -24,15 +24,34 @@ Every slider has a box next to it for typing an exact value (lengths in the curr
 
 ### G-code for a 3-axis router
 
-The **G-code** section (CNC relief mode) writes one file per tool, in plain G-code that GRBL, Mach3/4, LinuxCNC and most hobby controllers run (G20/G21 follows the inch/mm setting; no tool changes or dwells).
+The **G-code** section (CNC relief mode) writes plain G-code that GRBL, Mach3/4, LinuxCNC, UCCNC and most hobby controllers run (G20/G21 follows the inch/mm setting). It is split into groups:
 
-- **Roughing** (optional): Z-level raster with its own tool (flat or ball end mill, Ø, flutes). It takes the material down level by level (**Stepdown**), lines **Rough stepover** apart, and stops **Leave for finish** above the surface. It only cuts where material is left, plunging at the plunge rate and retracting between cuts.
-- **Finishing**: zig-zag raster with the **Finishing tool** from the Relief section (ball, tapered ball, V-bit or flat), along X, Y or both (cross-hatch). The tool rides on the surface without gouging, using the same tool shape as the "As cut" view. The info line shows the ridge height the **Finish stepover** leaves and the recommended stepover (10 % of the ball / tip Ø).
-- **Speeds and feeds**: pick the **Material** and press **Use recommended**. That fills spindle speed, feed, plunge, stepdown and stepovers from common chip-load charts for a router (18 000 rpm, feeds capped at 5 m/min). These are conservative starting points; adjust them for your machine.
-- **Zero**: X0 Y0 is the front-left corner of the part. Z0 is the top of the part (the stock must be exactly base + relief thick) or the spoilboard. Re-zero Z after changing tools.
-- **Toolpaths** in the 3D view draws them (roughing orange, finishing blue) and shows estimated run times.
+- **Job**: **Material** (sets the recommended speeds and feeds), **Stock thickness** (0 = exactly the part height; thicker stock is faced off by the roughing pass first), **Z zero** (top of the stock, or the spoilboard) and the **Safe height** for moves across.
+- **Roughing** (optional, T1): Z-level raster with a flat or ball end mill. It takes the material down level by level (**Stepdown**), lines **Stepover** apart, and stops **Leave for finish** above the surface, cutting only where material is left.
+- **Finishing** (T2): zig-zag raster with the **Finishing tool** from the Relief section (ball, tapered ball, V-bit or flat), along X, Y or both (cross-hatch). The tool rides on the surface without gouging, using the same tool shape as the "As cut" view. The info shows the ridge height the stepover leaves and the recommended stepover (10 % of the ball / tip Ø, or a 0.004 mm ridge for tiny tips).
+- **Detail (rest machining)** (optional, T3): after finishing, a smaller tapered ball, ball or V-bit goes over only the spots the finishing tool could not get into (eyes, hair, tight creases; see them with Show → Missed areas). It hops between them just over the finished surface instead of going up to the safe height. With it on, **As cut** and **Missed areas** show what is left after both tools.
+- **Cutout** (optional, T1 again): cuts the part free with the roughing tool, round the outside at the tool radius in one continuous spiral (no plunging), down to **Cut below** into the spoilboard, with **Tabs per side** to hold the part. Climb (clockwise) or conventional.
+- **Machine**: spindle speed range and max feed (the recommendations stay inside them), **Ramp angle** (each cut starts by going back and forth along its start while going down, instead of plunging; 0 = plunge), **Spindle spin-up** (G4 wait after M3) and the **Tool change** style for the all-in-one file.
+
+Every cut starts with a rapid down to 1 mm above the material that is actually there (roughing knows the level above), then the ramp, so the tool doesn't feed slowly through air.
+
+**My tools**: each tool group has a tool library (kept in the browser, seeded with common router bits). Pick one to fill in type, Ø, angle and flutes; **Save** adds the current tool.
+
+**Use recommended speeds & feeds** fills in spindle speed, feeds, plunge, stepdown and stepovers for all tools from chip-load charts. When the feed for the chart chip load is more than the machine's max feed, it slows the spindle instead (down to the machine's minimum), so the tool still takes a proper chip. The info box shows each tool's chip load against the chart and warns about anything that will burn (too little chip), break a tool (too much), exceed the machine, leave visible ridges, or leave ridges of material between roughing lines.
+
+Exports:
+
+- **Roughing / Finishing / Detail / Cutout**: one file per operation (re-zero Z after each tool change).
+- **All in one file**: every operation in order with a tool change between tools: `T# M6` (Mach3/4, LinuxCNC, UCCNC, gSender, UGS) or an `M0` pause (plain GRBL, which doesn't know M6; there the separate files are easier).
+- **Setup sheet**: a printable page with stock size, zero, the tool list, each operation's speeds, feeds, steps, chip load and run time, and the setup steps.
+
+**Zero**: X0 Y0 is the front-left corner of the part (bottom-left of the picture). **Toolpaths** in the 3D view draws the paths (roughing orange, finishing blue, detail pink, cutout green), the stock outline and the X0 Y0 Z0 origin (X red, Y green, Z blue), and shows estimated run times.
+
+Changing only G-code settings never recomputes the relief.
 
 Air-cut a new file above the stock first.
+
+**Settings file** (under Advanced): **Save…** writes every setting to a JSON file, **Load…** reads it back. Use it to keep a job's settings with its photo or to move your setup to another computer. **Reset all** keeps the G-code and machine settings.
 
 ### What the cutter will leave
 
@@ -61,6 +80,8 @@ Set **Make** to **Lithophane (3D print)**. Instead of a carved shape, the tool m
 | Radius | 80 mm | Curved only: radius of the inside face. Smaller = more curved. The width is measured along the curve; the info box shows the arc angle and footprint. Radii so small the ends would touch are raised automatically. |
 | Frame | 3 mm | Solid full-thickness border; stiffens the plate. 0 = none. |
 | Mesh resolution (Advanced) | 0.2 mm | STL point spacing, about half the nozzle diameter. |
+
+**Test strip** prints a 100 × 20 mm strip of 10 grey steps, white to black, made with your thickness settings. Hold it to your light: you should see 10 distinct steps. If the darkest few look the same, lower Max thickness; if the lightest few look the same or show pinholes, raise Min thickness.
 
 ### Lamp shade
 

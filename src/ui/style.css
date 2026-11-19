@@ -18,7 +18,7 @@ header .sub { color: var(--muted); font-size: 12.5px; }
 .pill { margin-left: auto; font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
 .pill:empty { display: none; }
 main { display: grid; grid-template-columns: 320px 1fr; height: calc(100% - 45px); }
-aside { overflow-y: auto; border-right: 1px solid var(--line); background: var(--panel); }
+aside { overflow-y: auto; overflow-x: hidden; border-right: 1px solid var(--line); background: var(--panel); }
 aside section { padding: 12px 14px; border-bottom: 1px solid var(--line); }
 aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
 .row { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 8px; margin: 6px 0; }
@@ -108,3 +108,13 @@ input.rpm { width: 52px; background: #121314; color: var(--text); border: 1px so
 
 .exports.two { grid-template-columns: 1fr 1fr; margin-top: 8px; }
 #camInfo { white-space: pre-line; }
+
+.cam-group { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 4px; }
+.cam-group h3 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.75; margin: 6px 0 4px; }
+.cam-group > summary { cursor: pointer; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.75; margin: 6px 0 4px; }
+.cam-note { font-size: 12px; opacity: 0.8; }
+div.cam-note { margin: 2px 0 4px; }
+.row.lib { grid-template-columns: 112px 1fr auto; }
+.row.lib select { min-width: 0; }
+.lib-btns { display: flex; gap: 4px; }
+#camWarn { white-space: pre-line; margin-top: 8px; }

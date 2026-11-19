@@ -109,7 +109,7 @@
               <li><b>Slicer:</b> 100 % infill (no pattern showing through), 0.12–0.16 mm layers, slow outer walls.</li>
               <li><b>Orientation:</b> stand it upright on its bottom edge with a brim. Curved ones are exported standing up already.</li>
               <li><b>Light:</b> a white LED (about 300–600 lumens) a few centimetres behind it.</li>
-              <li><b>Test first:</b> set the width to about 2" and print a small piece to check your filament.</li>
+              <li><b>Test first:</b> print the <b>Test strip</b> (10 grey steps, white to black, with your thickness settings) and hold it to your light. You should see 10 distinct steps. If the darkest few look the same, lower Max thickness; if the lightest few look the same or show pinholes, raise Min thickness.</li>
               <li><b>Too dark?</b> Lower max thickness or raise Brightness. <b>Washed-out highlights?</b> Raise min thickness.</li>
               <li><b>Lamp shade:</b> print standing on its bottom edge, no supports, 100 % infill. Set the lamp diameter so it slips over your LED puck light (or use the bottom lip to rest on it). With a lamp fitter, use an LED bulb only: PLA softens at about 60 °C.</li>
               <li><b>Shapes with a hanging hole:</b> print flat on the bed (picture side up) or upright with a brim.</li>
@@ -120,22 +120,31 @@
             <div id="advanced"></div>
             <div class="row">
               <span></span>
-              <span class="preset-mod">Everything except size, relief height and base <button type="button" class="small" id="resetAll">Reset all</button></span>
+              <span class="preset-mod">Everything except size, relief height, base and G-code settings <button type="button" class="small" id="resetAll">Reset all</button></span>
+            </div>
+            <div class="row" title="Keep a job's settings next to its photo, or move your setup to another computer">
+              <span>Settings file</span>
+              <span class="preset-mod"><button type="button" class="small" id="saveSettings">Save…</button> <label class="small-btn">Load…<input type="file" id="settingsFile" accept=".json,application/json" hidden /></label></span>
             </div>
           </details>
         </section>
 
         <section id="camSection">
           <h2>G-code (3-axis router)</h2>
-          <div id="cam"></div>
-          <div class="row">
+          <div class="row" id="camRecRow">
             <span></span>
-            <button type="button" class="small" id="camRecommend" title="Fills in speeds, feeds, stepdown and stepovers for the chosen material and tools">Use recommended</button>
+            <button type="button" class="small" id="camRecommend" title="Fills in spindle speed, feeds, stepdown and stepovers for this material and your tools, within your machine's limits (Machine below)">Use recommended speeds &amp; feeds</button>
           </div>
+          <div id="cam"></div>
+          <div id="camWarn" class="warn" hidden></div>
           <div id="camInfo" class="status"></div>
-          <div class="exports two">
-            <button id="expRough" disabled title="Roughing toolpath (roughing tool)">Roughing G-code</button>
-            <button id="expFinish" disabled title="Finishing toolpath (finishing tool)">Finishing G-code</button>
+          <div class="exports">
+            <button id="expRough" disabled title="Roughing pass only (T1, roughing tool)">Roughing</button>
+            <button id="expFinish" disabled title="Finishing pass only (T2, finishing tool)">Finishing</button>
+            <button id="expDetail" disabled title="Detail pass only (T3, detail tool)">Detail</button>
+            <button id="expCutout" disabled title="Cutout only (T1, roughing tool)">Cutout</button>
+            <button id="expAll" disabled title="Every pass in one file, in order, with a tool change (T# M6 or M0, see Machine) between tools">All in one file</button>
+            <button id="expSetup" disabled title="Printable job sheet: stock, zero, tools, speeds and feeds, run times">Setup sheet</button>
           </div>
         </section>
 
@@ -148,6 +157,7 @@
             <button id="exp3mf" disabled title="Same mesh as the STL in a smaller 3MF package that slicers open directly">3MF</button>
             <button id="expPng" disabled title="16-bit greyscale height map (black = lowest, white = highest) for Vectric Aspire, Carveco or laser software">Height map</button>
             <button id="expStand" disabled title="Separate stand with a tilted slot that the flat lithophane slides into">Stand STL</button>
+            <button id="expWedge" disabled title="Small strip of 10 grey steps (white to black) made with your thickness settings: print it to test your filament and light before printing the real thing">Test strip</button>
           </div>
           <div id="exportInfo" class="status"></div>
         </section>
@@ -188,7 +198,7 @@
                   <option value="reach">Missed areas</option>
                 </select>
               </label>
- <label id="pathCtl" title="Draws the roughing (orange) and finishing (blue) toolpaths over the part"><input type="checkbox" id="showPaths" /> Toolpaths</label>
+              <label id="pathCtl" title="Draws the toolpaths over the part (roughing orange, finishing blue, detail pink, cutout green), the stock outline and the X0 Y0 Z0 origin (X red, Y green, Z blue)"><input type="checkbox" id="showPaths" /> Toolpaths</label>
               <button id="spin" class="small" title="Turn the part (a lamp shade turns about its own axis)">Spin</button>
               <label title="Turns per minute">rpm <input type="number" id="rpm" value="10" min="1" max="300" step="1" class="rpm" /></label>
               <label id="strobeCtl" title="Simulates a strobe light that flashes each time the next picture faces you, so the pictures play like a flip book. A real lamp needs a strobe (or a zoetrope with slits) synced to its speed to look like this; under steady light the pictures just slide past.">

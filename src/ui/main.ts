@@ -1,16 +1,18 @@
-import { DEFAULT_PARAMS, PRESETS, PresetName, ReliefParams, minLithoRadius, effectiveGridSpacing } from '../core/params';
+import { DEFAULT_PARAMS, PRESETS, PresetName, ReliefParams, minLithoRadius, effectiveGridSpacing, CAM_KEYS } from '../core/params';
 import { shadeHeightfield } from '../core/shade';
 import type { Grid } from '../core/grid';
 import type { RawInputs } from '../core/relief';
 import type { MaskModelKey, Device } from '../models/infer';
-import type { ComputeRequest, ComputeResponse, ExportKind, ModelRequest, ModelResponse, ReliefStats } from '../workers/protocol';
-import { FIELDS, Field } from './schema';
+import type { ComputeRequest, ComputeResponse, ExportKind, GcodeOp, ModelRequest, ModelResponse, ReliefStats } from '../workers/protocol';
+import { FIELDS, Field, CAM_GROUPS, CamGroup } from './schema';
 import { maskQuality } from '../core/maskQuality';
 import { MASK_MODELS } from '../models/infer';
 import { ReliefPreview, Finish } from './preview3d';
 import { backlitBrightness } from '../core/litho';
 import { photoLuminance, LampImages, cropDialog } from './images';
-import { recommend, stepoverFor, scallopHeight } from '../core/cam';
+import { recommend, stepoverFor, scallopHeight, chipRatio, toolLabel, type Material } from '../core/cam';
+import type { Cutter, ToolType } from '../core/cutter';
+import { loadTools, saveTools, defaultName, sameTool, type LibTool } from './tools';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const MM_PER_IN = 25.4;
@@ -120,9 +122,131 @@ function fillPresets(f: Field) {
   );
 }
 
+// ---- G-code section: groups and the tool library ------------------------------------------------
+const camGroups = new Map<CamGroup, HTMLElement>();
+/** the container for a group of G-code fields (created in the order they first appear) */
+function camHost(g: CamGroup): HTMLElement {
+  let el = camGroups.get(g);
+  if (!el) {
+    if (g === 'machine') {
+      const d = document.createElement('details');
+      d.innerHTML = `<summary>${CAM_GROUPS[g]} and G-code options</summary>`;
+      el = d;
+    } else {
+      el = document.createElement('div');
+      const h = document.createElement('h3');
+      h.textContent = CAM_GROUPS[g];
+      el.appendChild(h);
+    }
+    el.className = 'cam-group';
+    el.id = `camg_${g}`;
+    $('cam').appendChild(el);
+    camGroups.set(g, el);
+  }
+  return el;
+}
+
+const finishTool = (): Cutter => ({ type: params.toolType, diameter: params.toolDiameter, angle: params.toolAngle });
+const roughToolNow = (): Cutter => ({ type: params.roughType, diameter: params.roughDiameter, angle: 0 });
+const detailToolNow = (): Cutter => ({ type: params.detailType, diameter: params.detailDiameter, angle: params.detailAngle });
+
+type Slot = 'rough' | 'finish' | 'detail';
+/** which tools each slot takes, and how it reads / sets them in the settings */
+const SLOTS: Record<Slot, { types: ToolType[]; get: () => Omit<LibTool, 'name'>; set: (t: LibTool) => void }> = {
+  rough: {
+    types: ['flat', 'ball'],
+    get: () => ({ ...roughToolNow(), flutes: params.roughFlutes }),
+    set: (t) => Object.assign(params, { roughType: t.type, roughDiameter: t.diameter, roughFlutes: t.flutes }),
+  },
+  finish: {
+    types: ['ball', 'taperedBall', 'vbit', 'flat'],
+    get: () => ({ ...finishTool(), flutes: params.finFlutes }),
+    set: (t) => Object.assign(params, { toolType: t.type, toolDiameter: t.diameter, toolAngle: t.type === 'ball' || t.type === 'flat' ? params.toolAngle : t.angle, finFlutes: t.flutes }),
+  },
+  detail: {
+    types: ['ball', 'taperedBall', 'vbit'],
+    get: () => ({ ...detailToolNow(), flutes: params.detailFlutes }),
+    set: (t) => Object.assign(params, { detailType: t.type, detailDiameter: t.diameter, detailAngle: t.type === 'ball' ? params.detailAngle : t.angle, detailFlutes: t.flutes }),
+  },
+};
+let library = loadTools();
+
+/** "My tools" row: pick a saved tool, save the current one, or remove one */
+function libRow(slot: Slot): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'row lib';
+  row.id = `lib_${slot}`;
+  row.title = 'Your tool library (kept in this browser). Pick a tool to fill in its type, size and flutes. Save adds the tool currently set below.';
+  const label = document.createElement('label');
+  label.textContent = 'My tools';
+  label.htmlFor = `libSel_${slot}`;
+  const sel = document.createElement('select');
+  sel.id = `libSel_${slot}`;
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.className = 'small';
+  save.textContent = 'Save';
+  save.title = 'Add the current tool to your library';
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'small';
+  del.textContent = '×';
+  del.title = 'Remove the selected tool from your library';
+  del.id = `libDel_${slot}`;
+  const wrap = document.createElement('span');
+  wrap.className = 'lib-btns';
+  wrap.append(save, del);
+  row.append(label, sel, wrap);
+  sel.addEventListener('change', () => {
+    const t = library[Number(sel.value)];
+    if (!t || sel.value === '') return;
+    SLOTS[slot].set(t);
+    syncInputs();
+    onParamsChanged();
+  });
+  save.addEventListener('click', () => {
+    const cur = SLOTS[slot].get();
+    const name = prompt('Name for this tool in your library:', defaultName(cur));
+    if (!name) return;
+    library = library.filter((t) => !sameTool(t, cur));
+    library.push({ ...cur, name });
+    library.sort((a, b) => a.type.localeCompare(b.type) || b.diameter - a.diameter);
+    saveTools(library);
+    syncLibs();
+  });
+  del.addEventListener('click', () => {
+    const t = library[Number(sel.value)];
+    if (!t || sel.value === '') return;
+    if (!confirm(`Remove "${t.name}" from your tool library?`)) return;
+    library.splice(Number(sel.value), 1);
+    saveTools(library);
+    syncLibs();
+  });
+  return row;
+}
+
+/** fills the library drop-downs and selects the entry matching each slot's current tool */
+function syncLibs() {
+  for (const slot of Object.keys(SLOTS) as Slot[]) {
+    const sel = document.getElementById(`libSel_${slot}`) as HTMLSelectElement | null;
+    if (!sel) continue;
+    const cur = SLOTS[slot].get();
+    const opts = [new Option('— pick a saved tool —', '')];
+    let match = '';
+    library.forEach((t, i) => {
+      if (!SLOTS[slot].types.includes(t.type)) return;
+      opts.push(new Option(t.name, String(i)));
+      if (!match && sameTool(t, cur)) match = String(i);
+    });
+    sel.replaceChildren(...opts);
+    sel.value = match;
+    ($(`libDel_${slot}`) as HTMLButtonElement).disabled = !match;
+  }
+}
+
 function buildFields() {
   for (const f of FIELDS) {
-    const host = $(f.advanced ? 'advanced' : 'cam' in f && f.cam ? 'cam' : 'basic');
+    const host = f.advanced ? $('advanced') : f.cam ? camHost(f.group ?? 'job') : $('basic');
     const row = document.createElement('div');
     row.className = 'row' + (f.kind === 'range' ? ' range' : '');
     if (f.help) row.title = f.help;
@@ -190,7 +314,24 @@ function buildFields() {
         if (e.key === 'Enter') n.blur();
       });
     }
+    if (f.key === 'finStepover') {
+      // the finishing tool is chosen in the Relief section (it also drives the cut simulation)
+      const t = document.createElement('div');
+      t.className = 'row';
+      t.innerHTML = '<label>Tool</label><span id="camFinTool" class="cam-note"></span>';
+      host.appendChild(t);
+      host.appendChild(libRow('finish'));
+    }
     host.appendChild(row);
+    if (f.key === 'roughOn') host.appendChild(libRow('rough'));
+    if (f.key === 'detailOn') host.appendChild(libRow('detail'));
+    if (f.key === 'cutoutOn') {
+      const t = document.createElement('div');
+      t.className = 'cam-note';
+      t.id = 'cutoutNote';
+      host.appendChild(t);
+    }
+    if (f.key === 'camMaterial') host.appendChild($('camRecRow'));
     const handler = () => {
       const p = params as unknown as Record<string, unknown>;
       if (f.kind === 'check') p[f.key] = (input as HTMLInputElement).checked;
@@ -236,7 +377,19 @@ function syncOutputs(force = false) {
     if (e) (e.input.parentElement as HTMLElement).style.display = on ? '' : 'none';
   };
   for (const { f } of inputs.values()) vis(f.key, Boolean(f.litho) === litho);
-  for (const k of ['roughType', 'roughDiameter', 'roughFlutes', 'roughStepdown', 'roughStepover', 'roughAllowance', 'roughRpm', 'roughFeed', 'roughPlunge'] as const) vis(k, params.roughOn);
+  // the roughing tool also does the cutout
+  const roughTool = params.roughOn || params.cutoutOn;
+  for (const k of ['roughType', 'roughDiameter', 'roughFlutes', 'roughStepdown', 'roughRpm', 'roughFeed', 'roughPlunge'] as const) vis(k, roughTool);
+  for (const k of ['roughStepover', 'roughAllowance'] as const) vis(k, params.roughOn);
+  $('lib_rough').hidden = !roughTool;
+  for (const k of ['detailType', 'detailDiameter', 'detailFlutes', 'detailStepover', 'detailRpm', 'detailFeed', 'detailPlunge'] as const) vis(k, params.detailOn);
+  vis('detailAngle', params.detailOn && params.detailType !== 'ball');
+  $('lib_detail').hidden = !params.detailOn;
+  for (const k of ['cutoutTabs', 'cutoutTabW', 'cutoutTabH', 'cutoutThrough', 'cutoutDir'] as const) vis(k, params.cutoutOn);
+  vis('cutoutTabW', params.cutoutOn && params.cutoutTabs > 0);
+  vis('cutoutTabH', params.cutoutOn && params.cutoutTabs > 0);
+  $('cutoutNote').textContent = params.cutoutOn ? `Uses the roughing tool (${params.roughOn ? 'set above' : 'shown above'}) and its stepdown and feeds.` : '';
+  syncLibs();
   $('camSection').hidden = litho;
   $('pathCtl').hidden = litho;
   updateCamInfo();
@@ -246,7 +399,7 @@ function syncOutputs(force = false) {
     vis('gradThreshold', params.method === 'gradient');
     vis('toneDarkUp', params.toneDepth > 0);
     vis('toneScale', params.toneDepth > 0);
-    vis('toolAngle', params.toolType !== 'ball');
+    vis('toolAngle', params.toolType !== 'ball' && params.toolType !== 'flat');
   } else {
     const sh = params.lithoShape, lamp = sh === 'lamp';
     vis('lithoRadius', sh === 'curved');
@@ -290,23 +443,75 @@ function updateDims() {
     toolInfo(s);
 }
 
-let lastPathTimes: { rough: number; finish: number } | null = null;
+let lastPaths: { ops: { name: string; sec: number }[]; total: number } | null = null;
+let lastDetailArea: number | undefined;
+let recNote = '';
 const fmtTime = (s: number) => {
   const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
-  return h ? `${h} h ${m} min` : `${m} min`;
+  return h ? `${h} h ${m} min` : `${Math.max(1, m)} min`;
 };
-/** ridge height the finishing stepover leaves, and run times when the toolpaths are shown */
+const fmtRate = (mm: number) => (units === 'in' ? `${(mm / MM_PER_IN).toFixed(1)} in/min` : `${Math.round(mm)} mm/min`);
+const fmtChip = (mm: number) => (units === 'in' ? `${(mm / MM_PER_IN).toFixed(4)}"` : `${mm.toFixed(3)} mm`);
+
+/**
+ * Checks the G-code settings and says what they will give: ridge height, chip loads against the
+ * chart, settings the machine cannot do, run times. Problems go in the warning box.
+ */
 function updateCamInfo() {
-  const tool = { type: params.toolType, diameter: params.toolDiameter, angle: params.toolAngle };
-  const rec = stepoverFor(tool);
-  let t = `Finish ridges ≈ ${fmtLen(scallopHeight(tool, params.finStepover))} on flat areas (recommended stepover ${fmtLen(rec)}).`;
-  if (params.roughOn && params.roughDiameter <= params.toolDiameter) t += `\nThe roughing tool is not bigger than the finishing tool.`;
-  if (!params.roughOn && params.reliefHeight > 2 * params.toolDiameter)
-    t += `\nNo roughing: the finishing tool cuts the full ${fmtLen(params.reliefHeight)} depth in one pass. Fine for soft material and shallow reliefs only.`;
-  if (lastPathTimes && showPaths())
-    t += `\nEstimated time: ${params.roughOn ? `roughing ${fmtTime(lastPathTimes.rough)}, ` : ''}finishing ${fmtTime(lastPathTimes.finish)}.`;
-  t += `\nX0 Y0 = front-left corner of the part; Z0 = ${params.zZero === 'top' ? 'top of the part' : 'spoilboard'}. One file per tool: re-zero Z after the tool change.`;
-  $('camInfo').textContent = t;
+  const ft = finishTool();
+  const note = document.getElementById('camFinTool');
+  if (note) note.textContent = `${toolLabel(ft, fmtLen)}, set under Relief`;
+  const info: string[] = [], warn: string[] = [];
+  if (recNote) info.push(recNote);
+  const mat = params.camMaterial as Material;
+  const ridge = scallopHeight(ft, params.finStepover);
+  const rec = stepoverFor(ft);
+  info.push(`Finish ridges ≈ ${fmtLen(ridge)} on flat areas (recommended stepover ${fmtLen(rec)}).`);
+  if (ridge > 0.05) warn.push(`Finishing ridges of ${fmtLen(ridge)} will show and need sanding: bring the finishing stepover down toward ${fmtLen(rec)}.`);
+  type Op = { label: string; tool: Cutter; flutes: number; rpm: number; feed: number; plunge: number; kind: 'rough' | 'finish' };
+  const ops: Op[] = [];
+  if (params.roughOn || params.cutoutOn)
+    ops.push({ label: params.roughOn ? 'Roughing' : 'Cutout', tool: roughToolNow(), flutes: params.roughFlutes, rpm: params.roughRpm, feed: params.roughFeed, plunge: params.roughPlunge, kind: 'rough' });
+  ops.push({ label: 'Finishing', tool: ft, flutes: params.finFlutes, rpm: params.finRpm, feed: params.finFeed, plunge: params.finPlunge, kind: 'finish' });
+  if (params.detailOn) ops.push({ label: 'Detail', tool: detailToolNow(), flutes: params.detailFlutes, rpm: params.detailRpm, feed: params.detailFeed, plunge: params.detailPlunge, kind: 'finish' });
+  const loads: string[] = [];
+  for (const o of ops) {
+    const c = chipRatio(mat, o.tool, o.flutes, o.rpm, o.feed, o.kind);
+    loads.push(`${o.label.toLowerCase()} ${fmtChip(c.actual)} (chart ${fmtChip(c.chart)})`);
+    if (c.ratio < 0.5) warn.push(`${o.label}: the chip load is under half the chart, so the tool will rub, burn the wood and dull. Raise the feed or slow the spindle (Use recommended).`);
+    else if (c.ratio > 1.6) warn.push(`${o.label}: the chip load is well over the chart: risk of breaking the tool. Lower the feed or speed up the spindle.`);
+    if (o.rpm > params.maxRpm + 1 || o.rpm < params.minRpm - 1) warn.push(`${o.label}: ${o.rpm} rpm is outside your spindle's range (${params.minRpm}–${params.maxRpm} rpm, under Machine).`);
+    if (o.feed > params.maxFeed + 1) warn.push(`${o.label}: feed ${fmtRate(o.feed)} is above your machine's max feed (${fmtRate(params.maxFeed)}).`);
+    if (o.plunge > o.feed + 1) warn.push(`${o.label}: the plunge rate is faster than the feed.`);
+  }
+  info.push(`Chip load per tooth: ${loads.join(', ')}.`);
+  if (params.roughOn) {
+    if (params.roughDiameter <= params.toolDiameter) warn.push('The roughing tool is not bigger than the finishing tool, so roughing gains nothing.');
+    if (params.roughStepover > 0.9 * params.roughDiameter) warn.push(`The roughing stepover is ${Math.round((100 * params.roughStepover) / params.roughDiameter)} % of the tool Ø: it leaves ridges of material between the lines. Keep it under about 50 %.`);
+    if (params.roughStepdown > params.roughDiameter) warn.push('The roughing stepdown is deeper than the tool is wide: hard on the tool and the machine.');
+  } else if (params.reliefHeight > 2 * params.toolDiameter) warn.push(`No roughing: the finishing tool cuts the full ${fmtLen(params.reliefHeight)} depth in one pass. Only for soft material and shallow reliefs.`);
+  const missed = lastStats?.missedFrac ?? 0;
+  if (params.detailOn) {
+    if (params.detailDiameter >= params.toolDiameter && params.detailType === params.toolType) warn.push('The detail tool is not smaller than the finishing tool, so it has nothing to do.');
+    info.push(`Detail ridges ≈ ${fmtLen(scallopHeight(detailToolNow(), params.detailStepover))} (recommended stepover ${fmtLen(stepoverFor(detailToolNow()))}).`);
+    if (lastDetailArea !== undefined && lastStats) {
+      const pct = (100 * lastDetailArea) / (lastStats.widthMm * lastStats.heightMm);
+      info.push(pct < 0.05 ? 'The detail tool has next to nothing to do on this relief: the finishing tool reaches nearly everything.' : `The detail pass works on ${pct.toFixed(1)} % of the part.`);
+    }
+  } else if (missed > 0.01)
+    info.push(`Tip: the finishing tool can't reach ${(100 * missed).toFixed(1)} % of the surface (Show: Missed areas). A detail pass with a smaller tapered ball or V-bit gets into those spots.`);
+  if (params.cutoutOn && params.roughType !== 'flat') warn.push('Cutting out with a ball end mill leaves a rounded edge at the bottom; a flat end mill is better.');
+  if (params.stockThick > 0 && lastStats && params.stockThick < lastStats.zMax - 1e-3)
+    warn.push(`The stock (${fmtLen(params.stockThick)}) is thinner than the part (${fmtLen(lastStats.zMax)}): it is taken as exactly the part height.`);
+  if (params.zZero === 'top' && params.stockThick === 0) info.push('Z0 on top of the stock assumes the stock is exactly the part height. Set Stock thickness if your board is thicker.');
+  if (lastPaths && showPaths())
+    info.push(`Estimated time: ${lastPaths.ops.map((o) => `${o.name} ${fmtTime(o.sec)}`).join(', ')}${lastPaths.ops.length > 1 ? `; ${fmtTime(lastPaths.total)} in all, plus tool changes` : ''}.`);
+  else info.push('Tick Toolpaths in the 3D view to see the paths and run times.');
+  info.push(`X0 Y0 = front-left corner of the part; Z0 = ${params.zZero === 'top' ? 'top of the stock' : 'spoilboard'}. Set Z0 again after each tool change.`);
+  $('camInfo').textContent = info.join('\n');
+  const w = $('camWarn');
+  w.textContent = warn.join('\n');
+  w.hidden = warn.length === 0;
 }
 
 function lampInfo(s: ReliefStats): string {
@@ -324,14 +529,10 @@ ${n} picture${n === 1 ? '' : 's'}, each ${fmtLen((Math.PI * D) / Math.max(1, n))
 
 function toolInfo(s: ReliefStats): string {
   if (params.mode !== 'relief' || s.missedFrac === undefined) return '';
-  const name =
-    params.toolType === 'ball'
-      ? `${fmtLen(params.toolDiameter)} ball`
-      : params.toolType === 'taperedBall'
-        ? `${fmtLen(params.toolDiameter)} tip ${params.toolAngle}° tapered ball`
-        : `${params.toolDiameter > 0 ? fmtLen(params.toolDiameter) + ' tip ' : ''}${params.toolAngle}° V-bit`;
+  const name = toolLabel(finishTool(), fmtLen);
+  const after = params.detailOn ? ` (after the detail pass, ${fmtLen(params.detailDiameter)} ${params.detailType === 'vbit' ? 'V-bit' : params.detailType === 'ball' ? 'ball' : 'tapered'})` : '';
   return `
-tool   ${name}: can't reach ${(100 * s.missedFrac).toFixed(1)} % (up to ${fmtLen(s.maxLeft ?? 0)} left)`;
+tool   ${name}: can't reach ${(100 * s.missedFrac).toFixed(1)} % (up to ${fmtLen(s.maxLeft ?? 0)} left)${after}`;
 }
 
 /** warns about thicknesses outside what prints and lights well (white PLA, 0.4 mm nozzle) */
@@ -495,7 +696,21 @@ function setExportsEnabled(on: boolean) {
   // STEP and height maps are for CAM; a lithophane goes to the slicer as STL / 3MF
   const litho = params.mode === 'lithophane';
   const flat = litho && params.lithoShape !== 'curved' && params.lithoShape !== 'lamp';
-  const show: Record<string, boolean> = { expSurface: !litho, expSolid: !litho, expStl: true, exp3mf: litho, expPng: !litho, expStand: flat, expRough: !litho && params.roughOn, expFinish: !litho };
+  const show: Record<string, boolean> = {
+    expSurface: !litho,
+    expSolid: !litho,
+    expStl: true,
+    exp3mf: litho,
+    expPng: !litho,
+    expStand: flat,
+    expWedge: litho,
+    expRough: !litho && params.roughOn,
+    expFinish: !litho,
+    expDetail: !litho && params.detailOn,
+    expCutout: !litho && params.cutoutOn,
+    expAll: !litho && (params.roughOn || params.detailOn || params.cutoutOn),
+    expSetup: !litho,
+  };
   for (const [id, vis] of Object.entries(show)) {
     const b = $(id) as HTMLButtonElement;
     b.hidden = !vis;
@@ -668,9 +883,10 @@ computeWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
       }
       preview.setHeightfield(shown, m.nx, m.ny, m.stats.widthMm, m.stats.heightMm);
       preview.setReach(m.left && view === 'reach' ? m.left : null);
-      lastPathTimes = m.paths ? { rough: m.paths.roughSec, finish: m.paths.finishSec } : null;
+      lastPaths = m.paths ? { ops: m.paths.ops.map((o) => ({ name: o.name, sec: o.sec })), total: m.paths.total } : null;
+      lastDetailArea = m.stats.detailArea;
     }
-    preview.setToolpaths(m.paths?.rough ?? null, m.paths?.finish ?? null);
+    preview.setToolpaths(m.paths?.ops ?? null, m.paths ? { stockTop: m.paths.stockTop, zeroZ: m.paths.zeroZ } : undefined);
     updateCamInfo();
     drawRelief(shown, m.nx, m.ny, m.stats);
     updateDims();
@@ -693,21 +909,39 @@ computeWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
     return;
   }
   if (m.type === 'exported' && m.id === exportId) {
-    const FILES: Record<ExportKind, [string, string, string]> = {
+    if (m.kind === 'setup') {
+      const html = new TextDecoder().decode(m.bytes);
+      if (setupWin && !setupWin.closed) {
+        setupWin.document.open();
+        setupWin.document.write(html);
+        setupWin.document.close();
+      } else {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+        a.download = `${photoName}_setup.html`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      }
+      setupWin = null;
+      exportInfo('Setup sheet opened in a new tab (print it from there).');
+      setExportsEnabled(true);
+      return;
+    }
+    const FILES: Record<Exclude<ExportKind, 'setup'>, [string, string, string]> = {
       surface: ['_surface', 'step', 'application/step'],
       solid: ['_solid', 'step', 'application/step'],
       stl: ['', 'stl', 'model/stl'],
       '3mf': ['', '3mf', 'model/3mf'],
       png: ['_heightmap', 'png', 'image/png'],
-      gcodeRough: ['_roughing', 'nc', 'text/plain'],
-      gcodeFinish: ['_finishing', 'nc', 'text/plain'],
+      gcode: [`_${exportOp}`, 'nc', 'text/plain'],
       stand: ['_stand', 'stl', 'model/stl'],
+      wedge: ['litho_test_strip', 'stl', 'model/stl'],
     };
     const [suffix, ext, mime] = FILES[m.kind];
     const blob = new Blob([m.bytes as BlobPart], { type: mime });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${isLamp() && m.kind !== 'stand' ? 'lamp_shade' : photoName}${suffix}.${ext}`;
+    a.download = m.kind === 'wedge' ? `${suffix}.${ext}` : `${isLamp() && m.kind !== 'stand' ? 'lamp_shade' : photoName}${suffix}.${ext}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -717,12 +951,15 @@ computeWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
   }
 };
 
-function doExport(kind: ExportKind, label: string) {
+let exportOp: GcodeOp = 'finishing';
+let setupWin: Window | null = null;
+function doExport(kind: ExportKind, label: string, op?: GcodeOp) {
   if (!haveInputsFor()) return;
   exportKind = label;
+  if (op) exportOp = op;
   setExportsEnabled(false);
   exportInfo(kind === 'surface' || kind === 'solid' ? 'Fitting B-spline surface…' : `Building ${label}…`);
-  sendCompute({ type: 'export', id: ++exportId, params: { ...params }, kind, name: photoName, units });
+  sendCompute({ type: 'export', id: ++exportId, params: { ...params }, kind, name: photoName, units, op });
 }
 
 // ---- wiring --------------------------------------------------------------------------------------
@@ -752,8 +989,10 @@ $('mode').addEventListener('change', () => {
 });
 $('resetAll').addEventListener('click', () => {
   // back to factory settings + the selected preset; keep the part size and stock the user chose
+  // (and the G-code / machine settings: they belong to the shop, not the picture)
   const { mode, widthMm, reliefHeight, baseThickness } = params;
-  params = { ...DEFAULT_PARAMS, mode, widthMm, reliefHeight, baseThickness };
+  const cam = Object.fromEntries(CAM_KEYS.map((k) => [k, params[k]]));
+  params = { ...DEFAULT_PARAMS, ...cam, mode, widthMm, reliefHeight, baseThickness };
   applyPreset();
 });
 updatePresetModified();
@@ -822,17 +1061,29 @@ $('expStl').addEventListener('click', () => doExport('stl', 'STL'));
 $('exp3mf').addEventListener('click', () => doExport('3mf', '3MF'));
 $('expPng').addEventListener('click', () => doExport('png', 'Height map'));
 $('expStand').addEventListener('click', () => doExport('stand', 'Stand STL'));
-$('expRough').addEventListener('click', () => doExport('gcodeRough', 'Roughing G-code'));
-$('expFinish').addEventListener('click', () => doExport('gcodeFinish', 'Finishing G-code'));
+$('expWedge').addEventListener('click', () => doExport('wedge', 'Test strip STL'));
+$('expRough').addEventListener('click', () => doExport('gcode', 'Roughing G-code', 'roughing'));
+$('expFinish').addEventListener('click', () => doExport('gcode', 'Finishing G-code', 'finishing'));
+$('expDetail').addEventListener('click', () => doExport('gcode', 'Detail G-code', 'detail'));
+$('expCutout').addEventListener('click', () => doExport('gcode', 'Cutout G-code', 'cutout'));
+$('expAll').addEventListener('click', () => doExport('gcode', 'G-code (all tools)', 'all'));
+$('expSetup').addEventListener('click', () => {
+  // open the tab now, while the click still counts (pop-up blockers), and fill it in when ready
+  setupWin = window.open('', '_blank');
+  setupWin?.document.write('<p style="font:14px system-ui">Building the setup sheet…</p>');
+  doExport('setup', 'Setup sheet');
+});
 $('showPaths').addEventListener('change', () => {
-  if (!showPaths()) preview.setToolpaths(null, null);
+  if (!showPaths()) preview.setToolpaths(null);
   updateCamInfo();
   requestRelief();
 });
 $('camRecommend').addEventListener('click', () => {
-  const mat = params.camMaterial;
-  const fin = recommend(mat, { type: params.toolType, diameter: params.toolDiameter, angle: params.toolAngle }, params.finFlutes, 'finish');
-  const rough = recommend(mat, { type: params.roughType, diameter: params.roughDiameter, angle: 0 }, params.roughFlutes, 'rough');
+  const mat = params.camMaterial as Material;
+  const m = { minRpm: params.minRpm, maxRpm: params.maxRpm, maxFeed: params.maxFeed };
+  const fin = recommend(mat, finishTool(), params.finFlutes, 'finish', m);
+  const rough = recommend(mat, roughToolNow(), params.roughFlutes, 'rough', m);
+  const det = recommend(mat, detailToolNow(), params.detailFlutes, 'finish', m);
   Object.assign(params, {
     finRpm: fin.rpm,
     finFeed: fin.feed,
@@ -843,9 +1094,46 @@ $('camRecommend').addEventListener('click', () => {
     roughPlunge: rough.plunge,
     roughStepdown: rough.stepdown,
     roughStepover: rough.stepover,
+    detailRpm: det.rpm,
+    detailFeed: det.feed,
+    detailPlunge: det.plunge,
+    detailStepover: det.stepover,
   });
+  const name = (($('p_camMaterial') as HTMLSelectElement).selectedOptions[0]?.textContent ?? mat).split(' (')[0];
+  recNote = `Recommended speeds, feeds and stepovers filled in for ${name.toLowerCase()}.`;
   syncInputs();
   onParamsChanged();
+  setTimeout(() => {
+    recNote = '';
+    updateCamInfo();
+  }, 6000);
+});
+
+// ---- settings file: keep a job's settings with the photo, or move them to another computer -----
+$('saveSettings').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify({ app: 'relief-generator', version: 1, units, params }, null, 1)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${photoName}_settings.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+});
+const settingsFile = $<HTMLInputElement>('settingsFile');
+settingsFile.addEventListener('change', async () => {
+  const f = settingsFile.files?.[0];
+  settingsFile.value = '';
+  if (!f) return;
+  try {
+    const j = JSON.parse(await f.text());
+    if (!j || typeof j.params !== 'object') throw new Error('not a Relief Generator settings file');
+    params = { ...DEFAULT_PARAMS, ...j.params };
+    if (j.units === 'mm' || j.units === 'in') units = j.units;
+    syncInputs();
+    onParamsChanged();
+    status(`Settings loaded from ${f.name}.`);
+  } catch (e) {
+    status(`Could not load ${f.name}: ${e instanceof Error ? e.message : e}`, true);
+  }
 });
 $('view').addEventListener('change', () => {
   updateDims();

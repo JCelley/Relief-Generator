@@ -16,11 +16,23 @@ export type Field =
       /** a feed rate (mm/min): shown per minute in the current units */
       rate?: boolean;
       cam?: boolean;
+      group?: CamGroup;
       /** common values offered in the number box's drop-down (mm for lengths) */
       presets?: [number, string][];
     }
-  | { key: keyof ReliefParams; label: string; kind: 'select'; options: [string, string][]; advanced?: boolean; litho?: boolean; cam?: boolean; help?: string }
-  | { key: keyof ReliefParams; label: string; kind: 'check'; advanced?: boolean; litho?: boolean; cam?: boolean; help?: string };
+  | { key: keyof ReliefParams; label: string; kind: 'select'; options: [string, string][]; advanced?: boolean; litho?: boolean; cam?: boolean; group?: CamGroup; help?: string }
+  | { key: keyof ReliefParams; label: string; kind: 'check'; advanced?: boolean; litho?: boolean; cam?: boolean; group?: CamGroup; help?: string };
+
+/** sub-sections of the G-code section */
+export type CamGroup = 'job' | 'rough' | 'finish' | 'detail' | 'cutout' | 'machine';
+export const CAM_GROUPS: Record<CamGroup, string> = {
+  job: 'Job',
+  rough: 'Roughing',
+  finish: 'Finishing',
+  detail: 'Detail (rest machining)',
+  cutout: 'Cutout',
+  machine: 'Machine',
+};
 
 /** `length: true` fields are lengths in mm and follow the mm/inch toggle. */
 export const FIELDS: Field[] = [
@@ -147,7 +159,7 @@ export const FIELDS: Field[] = [
   },
   { key: 'toneDarkUp', label: 'Raise dark areas', kind: 'check', help: 'Tone carving: raise dark areas instead of cutting them in.' },
 
-  // G-code (cam: true → the G-code section)
+  // G-code (cam: true → the G-code section, in groups)
   {
     key: 'camMaterial',
     label: 'Material',
@@ -160,31 +172,49 @@ export const FIELDS: Field[] = [
       ['aluminum', 'Aluminum'],
     ],
     cam: true,
+    group: 'job',
     help: 'Sets the recommended speeds and feeds (Use recommended).',
   },
-  { key: 'roughOn', label: 'Roughing pass', kind: 'check', cam: true, help: 'Clears the bulk of the material level by level with a larger tool first, leaving a little for the finishing pass. Needed unless the relief is shallow and the material soft.' },
+  { key: 'stockThick', label: 'Stock thickness', kind: 'range', min: 0, max: 100, step: 0.1, unit: 'mm', length: true, cam: true, group: 'job', help: 'Thickness of the board you are cutting from. 0 = exactly the part height (base + relief). Thicker stock: the roughing pass faces the extra off first.' },
+  {
+    key: 'zZero',
+    label: 'Z zero',
+    kind: 'select',
+    options: [
+      ['top', 'Top of the stock'],
+      ['bottom', 'Bottom (spoilboard)'],
+    ],
+    cam: true,
+    group: 'job',
+    help: 'Top: touch off on the top of the stock (set the stock thickness to what you are using). Bottom: touch off on the spoilboard; easier to repeat exactly after a tool change.',
+  },
+  { key: 'safeZ', label: 'Safe height', kind: 'range', min: 1, max: 50, step: 0.5, unit: 'mm', length: true, cam: true, group: 'job', help: 'Height above the top of the stock for moves across. Raise it if clamps stick up.' },
+
+  { key: 'roughOn', label: 'Roughing pass', kind: 'check', cam: true, group: 'rough', help: 'Clears the bulk of the material level by level with a larger tool first, leaving a little for the finishing pass. Needed unless the relief is shallow and the material soft.' },
   {
     key: 'roughType',
-    label: 'Roughing tool',
+    label: 'Tool',
     kind: 'select',
     options: [
       ['flat', 'Flat end mill'],
       ['ball', 'Ball end mill'],
     ],
     cam: true,
+    group: 'rough',
   },
-  { key: 'roughDiameter', label: 'Roughing Ø', kind: 'range', min: 1, max: 25.4, step: 0.0125, unit: 'mm', length: true, cam: true, presets: [[3.175, '1/8"'], [6.35, '1/4"'], [9.525, '3/8"'], [12.7, '1/2"'], [3, '3 mm'], [6, '6 mm'], [8, '8 mm']] },
-  { key: 'roughFlutes', label: 'Roughing flutes', kind: 'range', min: 1, max: 4, step: 1, cam: true },
-  { key: 'roughStepdown', label: 'Stepdown', kind: 'range', min: 0.1, max: 12, step: 0.05, unit: 'mm', length: true, cam: true, help: 'Depth per roughing level. About half the tool Ø in wood, a quarter or less in aluminium.' },
-  { key: 'roughStepover', label: 'Rough stepover', kind: 'range', min: 0.1, max: 20, step: 0.05, unit: 'mm', length: true, cam: true, help: 'Distance between roughing lines. About 40 % of the tool Ø.' },
-  { key: 'roughAllowance', label: 'Leave for finish', kind: 'range', min: 0, max: 3, step: 0.05, unit: 'mm', length: true, cam: true, help: 'Material the roughing pass leaves on the surface for the finishing pass to clean up.' },
-  { key: 'roughRpm', label: 'Rough spindle', kind: 'range', min: 1000, max: 30000, step: 100, unit: 'rpm', cam: true },
-  { key: 'roughFeed', label: 'Rough feed', kind: 'range', min: 50, max: 10000, step: 10, unit: 'mm', length: true, rate: true, cam: true },
-  { key: 'roughPlunge', label: 'Rough plunge', kind: 'range', min: 20, max: 5000, step: 10, unit: 'mm', length: true, rate: true, cam: true },
-  { key: 'finStepover', label: 'Finish stepover', kind: 'range', min: 0.02, max: 5, step: 0.005, unit: 'mm', length: true, cam: true, help: 'Distance between finishing lines (uses the finishing tool above). Smaller = smoother but longer. Recommended: 10 % of the ball / tip Ø; the ridge height it leaves is shown below.' },
+  { key: 'roughDiameter', label: 'Tool Ø', kind: 'range', min: 1, max: 25.4, step: 0.0125, unit: 'mm', length: true, cam: true, group: 'rough', presets: [[3.175, '1/8"'], [6.35, '1/4"'], [9.525, '3/8"'], [12.7, '1/2"'], [3, '3 mm'], [6, '6 mm'], [8, '8 mm']] },
+  { key: 'roughFlutes', label: 'Flutes', kind: 'range', min: 1, max: 4, step: 1, cam: true, group: 'rough' },
+  { key: 'roughStepdown', label: 'Stepdown', kind: 'range', min: 0.1, max: 12, step: 0.05, unit: 'mm', length: true, cam: true, group: 'rough', help: 'Depth per roughing level (and per lap of the cutout). About half the tool Ø in wood, a quarter or less in aluminium.' },
+  { key: 'roughStepover', label: 'Stepover', kind: 'range', min: 0.1, max: 20, step: 0.05, unit: 'mm', length: true, cam: true, group: 'rough', help: 'Distance between roughing lines. About 40 % of the tool Ø.' },
+  { key: 'roughAllowance', label: 'Leave for finish', kind: 'range', min: 0, max: 3, step: 0.05, unit: 'mm', length: true, cam: true, group: 'rough', help: 'Material the roughing pass leaves on the surface for the finishing pass to clean up. 0.3–0.5 mm in wood.' },
+  { key: 'roughRpm', label: 'Spindle', kind: 'range', min: 1000, max: 30000, step: 100, unit: 'rpm', cam: true, group: 'rough' },
+  { key: 'roughFeed', label: 'Feed', kind: 'range', min: 50, max: 10000, step: 10, unit: 'mm', length: true, rate: true, cam: true, group: 'rough' },
+  { key: 'roughPlunge', label: 'Plunge', kind: 'range', min: 20, max: 5000, step: 10, unit: 'mm', length: true, rate: true, cam: true, group: 'rough' },
+
+  { key: 'finStepover', label: 'Stepover', kind: 'range', min: 0.02, max: 5, step: 0.005, unit: 'mm', length: true, cam: true, group: 'finish', help: 'Distance between finishing lines. Smaller = smoother but longer. Recommended: 10 % of the ball / tip Ø; the ridge height it leaves is shown below.' },
   {
     key: 'finDir',
-    label: 'Finish direction',
+    label: 'Direction',
     kind: 'select',
     options: [
       ['x', 'Along X'],
@@ -192,23 +222,69 @@ export const FIELDS: Field[] = [
       ['xy', 'X then Y (cross-hatch)'],
     ],
     cam: true,
-    help: 'Cross-hatch runs a second pass at 90° for a finer finish (twice the time).',
+    group: 'finish',
+    help: 'Cross-hatch runs a second pass at 90° for a finer finish (twice the time). Along the grain of the wood usually looks best. The detail pass uses the same direction.',
   },
-  { key: 'finFlutes', label: 'Finish flutes', kind: 'range', min: 1, max: 4, step: 1, cam: true },
-  { key: 'finRpm', label: 'Finish spindle', kind: 'range', min: 1000, max: 30000, step: 100, unit: 'rpm', cam: true },
-  { key: 'finFeed', label: 'Finish feed', kind: 'range', min: 50, max: 10000, step: 10, unit: 'mm', length: true, rate: true, cam: true },
-  { key: 'finPlunge', label: 'Finish plunge', kind: 'range', min: 20, max: 5000, step: 10, unit: 'mm', length: true, rate: true, cam: true },
-  { key: 'safeZ', label: 'Safe height', kind: 'range', min: 1, max: 50, step: 0.5, unit: 'mm', length: true, cam: true, help: 'Height above the top of the part for rapid moves. Raise it if clamps stick up.' },
+  { key: 'finFlutes', label: 'Flutes', kind: 'range', min: 1, max: 4, step: 1, cam: true, group: 'finish' },
+  { key: 'finRpm', label: 'Spindle', kind: 'range', min: 1000, max: 30000, step: 100, unit: 'rpm', cam: true, group: 'finish' },
+  { key: 'finFeed', label: 'Feed', kind: 'range', min: 50, max: 10000, step: 10, unit: 'mm', length: true, rate: true, cam: true, group: 'finish' },
+  { key: 'finPlunge', label: 'Plunge', kind: 'range', min: 20, max: 5000, step: 10, unit: 'mm', length: true, rate: true, cam: true, group: 'finish' },
+
+  { key: 'detailOn', label: 'Detail pass', kind: 'check', cam: true, group: 'detail', help: 'Rest machining: after the finishing pass, a smaller tool (tapered ball or V-bit) goes over only the spots the finishing tool could not get into (eyes, hair, tight creases). See them with Show: Missed areas.' },
   {
-    key: 'zZero',
-    label: 'Z zero',
+    key: 'detailType',
+    label: 'Tool',
     kind: 'select',
     options: [
-      ['top', 'Top of the part'],
-      ['bottom', 'Bottom (spoilboard)'],
+      ['taperedBall', 'Tapered ball nose'],
+      ['ball', 'Ball end mill'],
+      ['vbit', 'V-bit / engraver'],
     ],
     cam: true,
-    help: 'Top: touch off on the top of the stock (the stock must be exactly the part height: base + relief). Bottom: touch off on the spoilboard; works with any stock thickness ≥ the part height and is easier to repeat after the tool change.',
+    group: 'detail',
+  },
+  { key: 'detailDiameter', label: 'Tip Ø', kind: 'range', min: 0, max: 6.35, step: 0.0125, unit: 'mm', length: true, cam: true, group: 'detail', presets: [[0.25, '0.25 mm'], [0.3969, '1/64"'], [0.5, '0.5 mm'], [0.79375, '1/32"'], [1, '1 mm'], [1.5875, '1/16"']], help: 'Ball / tip diameter of the detail tool (0 = sharp V-bit). Smaller than the finishing tool.' },
+  { key: 'detailAngle', label: 'Included angle', kind: 'range', min: 5, max: 150, step: 0.5, unit: '°', cam: true, group: 'detail', presets: [[6, ''], [10, ''], [15, ''], [20, ''], [30, ''], [60, ''], [90, '']] },
+  { key: 'detailFlutes', label: 'Flutes', kind: 'range', min: 1, max: 4, step: 1, cam: true, group: 'detail' },
+  { key: 'detailStepover', label: 'Stepover', kind: 'range', min: 0.01, max: 2, step: 0.005, unit: 'mm', length: true, cam: true, group: 'detail', help: 'Recommended: 10 % of the tip Ø.' },
+  { key: 'detailRpm', label: 'Spindle', kind: 'range', min: 1000, max: 30000, step: 100, unit: 'rpm', cam: true, group: 'detail' },
+  { key: 'detailFeed', label: 'Feed', kind: 'range', min: 50, max: 10000, step: 10, unit: 'mm', length: true, rate: true, cam: true, group: 'detail' },
+  { key: 'detailPlunge', label: 'Plunge', kind: 'range', min: 20, max: 5000, step: 10, unit: 'mm', length: true, rate: true, cam: true, group: 'detail' },
+
+  { key: 'cutoutOn', label: 'Cut out', kind: 'check', cam: true, group: 'cutout', help: 'Cuts the part free from the board at the end, with the roughing tool (best a flat end mill), going round the outside in one continuous spiral so it never plunges. Tabs hold the part in place.' },
+  { key: 'cutoutTabs', label: 'Tabs per side', kind: 'range', min: 0, max: 6, step: 1, cam: true, group: 'cutout', help: 'Little bridges that keep the part attached. Cut them with a knife or flush-trim saw and sand. 0 = none (hold the part down another way: it comes loose at the end).' },
+  { key: 'cutoutTabW', label: 'Tab length', kind: 'range', min: 2, max: 25, step: 0.5, unit: 'mm', length: true, cam: true, group: 'cutout' },
+  { key: 'cutoutTabH', label: 'Tab height', kind: 'range', min: 0.5, max: 10, step: 0.1, unit: 'mm', length: true, cam: true, group: 'cutout', help: 'Thickness of the tabs, measured up from the bottom of the part.' },
+  { key: 'cutoutThrough', label: 'Cut below', kind: 'range', min: 0, max: 3, step: 0.05, unit: 'mm', length: true, cam: true, group: 'cutout', help: 'How far into the spoilboard to go, so the part comes out cleanly.' },
+  {
+    key: 'cutoutDir',
+    label: 'Direction',
+    kind: 'select',
+    options: [
+      ['climb', 'Climb (clockwise)'],
+      ['conventional', 'Conventional (counter-clockwise)'],
+    ],
+    cam: true,
+    group: 'cutout',
+    help: 'Climb leaves the cleaner edge on a stiff machine. Conventional is gentler on a machine with flex or backlash.',
+  },
+
+  { key: 'maxRpm', label: 'Spindle max', kind: 'range', min: 5000, max: 60000, step: 500, unit: 'rpm', cam: true, group: 'machine', help: 'Top speed of your spindle or router.' },
+  { key: 'minRpm', label: 'Spindle min', kind: 'range', min: 1000, max: 30000, step: 500, unit: 'rpm', cam: true, group: 'machine', help: 'Lowest speed it runs at (Makita / DeWalt 611 router: about 10 000 / 16 000 rpm; VFD spindles go lower). The recommendation slows the spindle instead of exceeding the max feed, down to this.' },
+  { key: 'maxFeed', label: 'Max feed', kind: 'range', min: 500, max: 30000, step: 100, unit: 'mm', length: true, rate: true, cam: true, group: 'machine', help: 'The fastest your machine cuts accurately. Recommended feeds never go above it (finishing at most 4000 mm/min).' },
+  { key: 'rampAngle', label: 'Ramp angle', kind: 'range', min: 0, max: 30, step: 0.5, unit: '°', cam: true, group: 'machine', help: 'Each cut starts by going back and forth along its start while going down at this angle, instead of plunging straight down (easier on end mills, which cut poorly at the centre). 0 = straight plunge. 3–5° in wood.' },
+  { key: 'spindleDelay', label: 'Spindle spin-up', kind: 'range', min: 0, max: 20, step: 0.5, unit: 's', cam: true, group: 'machine', help: 'Wait after starting the spindle before moving (G4 P). Some Mach3 setups read P in milliseconds: then this does nothing harmful but does not wait either.' },
+  {
+    key: 'toolChange',
+    label: 'Tool change',
+    kind: 'select',
+    options: [
+      ['m6', 'T# M6 (Mach3/4, LinuxCNC, UCCNC, gSender, UGS)'],
+      ['m0', 'M0 pause (plain GRBL)'],
+    ],
+    cam: true,
+    group: 'machine',
+    help: 'Only for the all-in-one file. Plain GRBL does not know M6; with M0 it pauses but cannot jog until you resume, so on plain GRBL the separate files are easier.',
   },
 
   // advanced

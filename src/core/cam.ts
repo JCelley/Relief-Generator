@@ -1,11 +1,11 @@
 import type { MachGrid } from './resample';
-import { tipHeight, toolProfile, type Cutter, type ToolType } from './cutter';
+import { tipHeight, toolProfile, simulateCut, type Cutter, type ToolType } from './cutter';
 
 /**
  * 3-axis toolpaths straight from the machining grid, and a plain G-code writer that runs on
- * GRBL, Mach3/4, LinuxCNC and most hobby router controllers (no tool changes, no dwell, comments in
- * parentheses). Coordinates: X0 Y0 = front-left corner of the part, X right, Y away from you;
- * Z0 = top of the part (or the bottom, see `zZero`).
+ * GRBL, Mach3/4, LinuxCNC and most hobby router controllers (comments in parentheses).
+ * Coordinates: X0 Y0 = front-left corner of the part, X right, Y away from you; Z0 = top of the
+ * stock (or the part bottom, see `zZero`).
  */
 
 /** a continuous cutting move: x, y, z triplets in part coordinates (mm, z = height above the bottom) */
@@ -14,7 +14,16 @@ export type Path = Float32Array;
 export interface Toolpath {
   name: string;
   tool: Cutter;
+  /** tool number (T#) for a file with several tools */
+  number: number;
   paths: Path[];
+  /** for each path: top of the material the tool meets over its start (mm above the part bottom);
+   *  the rapid down stops 1 mm above it. Default: the stock top */
+  entry?: number[];
+  /** for each path: a height (mm above the part bottom) at which a rapid from the end of the path
+   *  before is clear of the material everywhere in the box between the two points (so it is safe
+   *  even when the controller's rapid is not a straight line); NaN = go up to the safe height */
+  link?: number[];
   rpm: number;
   feed: number;
   plunge: number;
@@ -127,13 +136,22 @@ export interface RoughOpts {
   stockTop: number;
 }
 
+/** paths plus, for each, the top of the material the tool meets over its start (see Toolpath.entry) */
+export interface PathSet {
+  paths: Path[];
+  entry: number[];
+  /** see Toolpath.link */
+  link?: number[];
+}
+
 /**
  * Z-level raster roughing: level by level from the top of the stock down, lines along X at
  * `stepover`; the tool cuts only where there is material left from the level above, never deeper
- * than `stepdown` per level and never closer than `allowance` to the design. Each run starts with a
- * plunge from the safe height and ends with a retract.
+ * than `stepdown` per level and never closer than `allowance` to the design. Every point of a run
+ * was visited at the level above (same lines every level), so the material over a run's start is at
+ * most that level: the tool can come down fast to just above it and ramp in from there.
  */
-export function roughingPaths(g: MachGrid, o: RoughOpts): Path[] {
+export function roughingPaths(g: MachGrid, o: RoughOpts): PathSet {
   const { nx, ny } = g;
   const tip = tipHeight(g, o.tool);
   for (let k = 0; k < tip.length; k++) tip[k] += o.allowance;
@@ -143,7 +161,7 @@ export function roughingPaths(g: MachGrid, o: RoughOpts): Path[] {
   const count = Math.max(1, Math.ceil(g.heightMm / o.stepover - 1e-6));
   const rows: number[] = [];
   for (let k = 0; k <= count; k++) rows.push(Math.min(g.heightMm, k * (g.heightMm / count)));
-  const out: Path[] = [];
+  const out: PathSet = { paths: [], entry: [] };
   const sd = Math.max(0.05, o.stepdown);
   let prev = o.stockTop;
   for (let level = o.stockTop - sd; prev > lo + 1e-4; level -= sd) {
@@ -153,21 +171,287 @@ export function roughingPaths(g: MachGrid, o: RoughOpts): Path[] {
       const a = Math.floor(f), b = Math.min(ny - 1, Math.ceil(f));
       const zt = (i: number) => Math.max(tip[a * nx + i], tip[b * nx + i]);
       const order = Array.from({ length: nx }, (_, i) => (ri % 2 === 0 ? i : nx - 1 - i));
-      let run: number[] = [];
+      let xs: number[] = [], zs: number[] = [];
       const flush = () => {
-        if (run.length >= 6) out.push(Float32Array.from(run));
-        run = [];
+        if (xs.length) {
+          // flat stretches at the level need only their ends
+          const pts: number[] = [];
+          for (const q of simplify(xs, zs, 0.002)) pts.push(xs[q], y, zs[q]);
+          out.paths.push(Float32Array.from(pts));
+          out.entry.push(prev);
+        }
+        xs = [];
+        zs = [];
       };
       for (const i of order) {
         const t = zt(i);
-        if (t < prev - 1e-3) run.push(X(i), y, Math.max(L, t));
-        else flush();
+        if (t < prev - 1e-3) {
+          xs.push(X(i));
+          zs.push(Math.max(L, t));
+        } else flush();
       }
       flush();
     });
     prev = L;
   }
   return out;
+}
+
+// ---- detail (rest machining) --------------------------------------------------------------------
+
+/** half-width of a cutter at height h above its tip */
+export function toolRadiusAt(tool: Cutter, h: number): number {
+  const r = tool.diameter / 2;
+  if (tool.type === 'flat') return r;
+  if (tool.type === 'ball') return h >= r ? r : Math.sqrt(Math.max(0, r * r - (r - h) * (r - h)));
+  let a = 0, b = r + h * Math.tan(((Math.min(179, tool.angle) / 2) * Math.PI) / 180) + 1;
+  for (let k = 0; k < 40; k++) {
+    const m = (a + b) / 2;
+    if (toolProfile(tool, m) <= h) a = m;
+    else b = m;
+  }
+  return a;
+}
+
+/**
+ * Where a smaller detail tool still has work after the finishing pass: grid points where the
+ * finishing tool leaves more than `min` mm that the detail tool can take off, grown by the detail
+ * tool's width there so it gets into the corner from all sides. `cut` = what the detail tool leaves.
+ */
+export function detailRegion(g: MachGrid, tool: Cutter, finishCut: Float32Array, min = 0.05): { region: Uint8Array; cut: Float32Array; area: number } {
+  const { nx, ny } = g;
+  const cut = simulateCut(g, tool).cut;
+  const seed = new Uint8Array(nx * ny);
+  let depth = 0;
+  for (let k = 0; k < seed.length; k++) {
+    const d = finishCut[k] - cut[k];
+    if (d > min) {
+      seed[k] = 1;
+      depth = Math.max(depth, d);
+    }
+  }
+  const rad = toolRadiusAt(tool, depth) + 0.5;
+  const ri = Math.ceil(rad / g.dx), rj = Math.ceil(rad / g.dy);
+  // square dilation, separable: rows then columns
+  const tmp = new Uint8Array(nx * ny), region = new Uint8Array(nx * ny);
+  for (let j = 0; j < ny; j++) {
+    let last = -1e9;
+    for (let i = 0; i < nx; i++) {
+      if (seed[j * nx + i]) last = i;
+      if (i - last <= ri) tmp[j * nx + i] = 1;
+    }
+    last = 1e9;
+    for (let i = nx - 1; i >= 0; i--) {
+      if (seed[j * nx + i]) last = i;
+      if (last - i <= ri) tmp[j * nx + i] = 1;
+    }
+  }
+  for (let i = 0; i < nx; i++) {
+    let last = -1e9;
+    for (let j = 0; j < ny; j++) {
+      if (tmp[j * nx + i]) last = j;
+      if (j - last <= rj) region[j * nx + i] = 1;
+    }
+    last = 1e9;
+    for (let j = ny - 1; j >= 0; j--) {
+      if (tmp[j * nx + i]) last = j;
+      if (last - j <= rj) region[j * nx + i] = 1;
+    }
+  }
+  let n = 0;
+  for (const v of region) n += v;
+  return { region, cut, area: (n / region.length) * g.widthMm * g.heightMm };
+}
+
+export interface DetailOpts {
+  tool: Cutter;
+  stepover: number;
+  dir: 'x' | 'y' | 'xy';
+  /** surface left by the finishing pass */
+  finishCut: Float32Array;
+  region: Uint8Array;
+}
+
+/**
+ * Raster lines with the detail tool, only where `region` is set: runs along each line, joined over
+ * gaps up to 1 mm (riding on the surface). Between runs less than 10 mm apart the tool hops across
+ * just over the finished surface (the tool's resting height over it is known everywhere) instead of
+ * going up to the safe height; each run is entered from just above that surface.
+ */
+export function detailPaths(g: MachGrid, o: DetailOpts): PathSet {
+  const { nx, ny } = g;
+  const tip = tipHeight(g, o.tool);
+  const above = tipHeight({ ...g, z: o.finishCut }, o.tool);
+  const out: PathSet = { paths: [], entry: [], link: [] };
+  /** highest resting height of the tool over the finished surface in the box between two points */
+  const hop = (x0: number, y0: number, x1: number, y1: number) => {
+    const i0 = Math.max(0, Math.floor(Math.min(x0, x1) / g.dx)), i1 = Math.min(nx - 1, Math.ceil(Math.max(x0, x1) / g.dx));
+    const j0 = Math.max(0, Math.floor(Math.min(y0, y1) / g.dy)), j1 = Math.min(ny - 1, Math.ceil(Math.max(y0, y1) / g.dy));
+    let h = -Infinity;
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) h = Math.max(h, above[j * nx + i]);
+    return h + 0.2;
+  };
+  let last: Path | null = null;
+  const dirs: ('x' | 'y')[] = o.dir === 'xy' ? ['x', 'y'] : [o.dir];
+  for (const along of dirs) {
+    const n = along === 'x' ? nx : ny, m = along === 'x' ? ny : nx;
+    const d = along === 'x' ? g.dy : g.dx, du = along === 'x' ? g.dx : g.dy;
+    const across = along === 'x' ? g.heightMm : g.widthMm;
+    const idx = (k: number, gi: number) => (along === 'x' ? gi * nx + k : k * nx + gi);
+    const pos = (k: number) => (k === n - 1 ? (along === 'x' ? g.widthMm : g.heightMm) : k * du);
+    const gap = Math.ceil(1 / du);
+    const count = Math.max(1, Math.ceil(across / o.stepover - 1e-6));
+    for (let li = 0; li <= count; li++) {
+      const s = Math.min(across, li * (across / count));
+      const f = Math.min(m - 1, Math.max(0, s / d));
+      const a = Math.floor(f), b = Math.min(m - 1, a + 1), w = f - a;
+      const zAt = (k: number) => tip[idx(k, a)] * (1 - w) + tip[idx(k, b)] * w;
+      const inR = (k: number) => o.region[idx(k, Math.round(f))] === 1;
+      const fwd = li % 2 === 0;
+      const ks: number[] = [];
+      for (let q = 0; q < n; q++) ks.push(fwd ? q : n - 1 - q);
+      // runs of in-region points, joined over short gaps
+      const runs: number[][] = [];
+      let cur: number[] = [], miss = 0;
+      for (const k of ks) {
+        if (inR(k)) {
+          if (cur.length && miss) for (let q = miss; q > 0; q--) cur.push(fwd ? k - q : k + q);
+          cur.push(k);
+          miss = 0;
+        } else if (cur.length) {
+          miss++;
+          if (miss > gap) {
+            runs.push(cur);
+            cur = [];
+            miss = 0;
+          }
+        }
+      }
+      if (cur.length) runs.push(cur);
+      for (const r of runs) {
+        const keep = simplify(r.map(pos), r.map(zAt), 0.002);
+        const pts: number[] = [];
+        for (const q of keep) {
+          const k = r[q];
+          if (along === 'x') pts.push(pos(k), s, zAt(k));
+          else pts.push(s, pos(k), zAt(k));
+        }
+        const k0 = r[0], q = last ? last.length - 3 : 0;
+        const near = last !== null && Math.hypot(pts[0] - last[q], pts[1] - last[q + 1]) <= 10;
+        const p = Float32Array.from(pts);
+        out.entry.push(Math.max(above[idx(k0, a)], above[idx(k0, b)]));
+        out.link!.push(near ? hop(last![q], last![q + 1], pts[0], pts[1]) : NaN);
+        out.paths.push(p);
+        last = p;
+      }
+    }
+  }
+  return out;
+}
+
+// ---- cutout -------------------------------------------------------------------------------------
+
+export interface CutoutOpts {
+  tool: Cutter;
+  widthMm: number;
+  heightMm: number;
+  stockTop: number;
+  stepdown: number;
+  /** how far below the part bottom to cut (mm), to cut cleanly through */
+  through: number;
+  /** holding tabs per side (0 = none), their length and height above the part bottom (mm) */
+  tabs: number;
+  tabWidth: number;
+  tabHeight: number;
+  /** climb: clockwise around the part (seen from above, spindle turning clockwise) */
+  climb: boolean;
+}
+
+/**
+ * Profile around the outside of the part, tool centre offset by its radius (round corners): one
+ * continuous spiral going down at most `stepdown` per lap, so the tool never plunges, then a last
+ * lap at the bottom. Over the tabs the tool stays at the tab height.
+ */
+export function cutoutPath(o: CutoutOpts): Path {
+  const r = Math.max(0, o.tool.diameter / 2), W = o.widthMm, H = o.heightMm;
+  // the outline as a polyline, clockwise from the bottom of the left side
+  const loop: [number, number][] = [];
+  const line = (x0: number, y0: number, x1: number, y1: number) => {
+    const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 2));
+    for (let k = 0; k < n; k++) loop.push([x0 + ((x1 - x0) * k) / n, y0 + ((y1 - y0) * k) / n]);
+  };
+  const arc = (cx: number, cy: number, a0: number, a1: number) => {
+    if (r < 1e-6) return;
+    for (let k = 0; k < 12; k++) {
+      const a = ((a0 + ((a1 - a0) * k) / 12) * Math.PI) / 180;
+      loop.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+    }
+  };
+  // straight sides as [start index, end index] for the tabs
+  const sides: [number, number][] = [];
+  const side = (x0: number, y0: number, x1: number, y1: number) => {
+    const s = loop.length;
+    line(x0, y0, x1, y1);
+    sides.push([s, loop.length]);
+  };
+  side(-r, 0, -r, H);
+  arc(0, H, 180, 90);
+  side(0, H + r, W, H + r);
+  arc(W, H, 90, 0);
+  side(W + r, H, W + r, 0);
+  arc(W, 0, 0, -90);
+  side(W, -r, 0, -r);
+  arc(0, 0, -90, -180);
+  loop.push([-r, 0]);
+  // arc length along the loop
+  const arcLen = () => {
+    const a = [0];
+    for (let k = 1; k < loop.length; k++) a.push(a[k - 1] + Math.hypot(loop[k][0] - loop[k - 1][0], loop[k][1] - loop[k - 1][1]));
+    return a;
+  };
+  let u = arcLen();
+  const P = u[u.length - 1];
+  // tab intervals along the loop (centred on each side, long enough to clear the tool)
+  const tabs: [number, number][] = [];
+  if (o.tabs > 0)
+    for (const [s, e] of sides) {
+      let ua = u[s], ub = u[Math.min(e, loop.length - 1)];
+      // conventional: the same loop run backwards
+      if (!o.climb) [ua, ub] = [P - ub, P - ua];
+      for (let k = 0; k < o.tabs; k++) {
+        const c = ua + ((ub - ua) * (k + 0.5)) / o.tabs, h = (o.tabWidth + 2 * r) / 2;
+        tabs.push([c - h, c + h]);
+      }
+    }
+  if (!o.climb) {
+    loop.reverse();
+    u = arcLen();
+  }
+  const bottom = -Math.max(0, o.through);
+  const tabTop = Math.min(o.stockTop, Math.max(bottom, o.tabHeight));
+  const laps = Math.max(1, Math.ceil((o.stockTop - bottom) / Math.max(0.05, o.stepdown) - 1e-6));
+  const pts: number[] = [];
+  const at = (s: number): [number, number] => {
+    let k = 1;
+    while (k < u.length - 1 && u[k] < s) k++;
+    const w = (s - u[k - 1]) / (u[k] - u[k - 1] || 1);
+    return [loop[k - 1][0] + (loop[k][0] - loop[k - 1][0]) * w, loop[k - 1][1] + (loop[k][1] - loop[k - 1][1]) * w];
+  };
+  for (let lap = 0; lap <= laps; lap++) {
+    const zAt = (s: number) => (lap === laps ? bottom : o.stockTop - ((o.stockTop - bottom) * (lap + s / P)) / laps);
+    const inTab = (s: number) => tabs.some(([a, b]) => s > a + 1e-6 && s < b - 1e-6);
+    const marks = new Set<number>(u.slice(lap === 0 ? 0 : 1));
+    for (const [a, b] of tabs) marks.add(a).add(b);
+    for (const s of [...marks].sort((x, y) => x - y)) {
+      const [x, y] = at(s);
+      const zl = zAt(s), zt = Math.max(zl, tabTop);
+      const enter = tabs.some(([a]) => Math.abs(s - a) < 1e-6), leave = tabs.some(([, b]) => Math.abs(s - b) < 1e-6);
+      if (enter) pts.push(x, y, zl, x, y, zt);
+      else if (leave) pts.push(x, y, zt, x, y, zl);
+      else pts.push(x, y, inTab(s) ? zt : zl);
+    }
+  }
+  return Float32Array.from(pts);
 }
 
 // ---- speeds and feeds ---------------------------------------------------------------------------
@@ -202,17 +486,32 @@ export interface Recommendation {
   stepover: number;
 }
 
+/** what the machine can do: spindle speed range (rpm) and the fastest feed it cuts well at (mm/min) */
+export interface Machine {
+  minRpm: number;
+  maxRpm: number;
+  maxFeed: number;
+}
+
+/** effective cutting diameter for chip-load purposes (a sharp V-bit still cuts with its flanks) */
+const cutDiameter = (tool: Cutter) => Math.max(tool.diameter, tool.type === 'vbit' || tool.type === 'taperedBall' ? 1.5 : 0.3);
+
 /**
- * Conservative starting speeds and feeds for a hobby router spindle (max 24 000 rpm). The
- * finishing pass of a ball / tapered tool cuts with less than its full diameter, so it uses 75 %
- * of the chip load. Stepover: roughing 40 % of Ø (30 % in aluminium); finishing see stepoverFor.
+ * Conservative starting speeds and feeds for a router spindle (18 000 rpm, plastic 16 000, within
+ * the machine's speed range). The finishing pass of a ball / tapered tool cuts with less than its
+ * full diameter, so it uses 75 % of the chip load. When the feed for that chip load is more than
+ * the machine does (or 4 000 mm/min for finishing, for accuracy), the spindle is slowed instead
+ * (down to its lowest speed) so the tool still takes a proper chip instead of rubbing and burning.
+ * Stepover: roughing 40 % of Ø (30 % in aluminium); finishing see stepoverFor.
  */
-export function recommend(material: Material, tool: Cutter, flutes: number, op: 'rough' | 'finish'): Recommendation {
-  const rpm = material === 'plastic' ? 16000 : 18000;
-  // effective cutting diameter: a sharp V-bit still cuts with its flanks
-  const d = Math.max(tool.diameter, tool.type === 'vbit' || tool.type === 'taperedBall' ? 1.5 : 0.3);
+export function recommend(material: Material, tool: Cutter, flutes: number, op: 'rough' | 'finish', mach: Machine = { minRpm: 10000, maxRpm: 24000, maxFeed: 5000 }): Recommendation {
+  const d = cutDiameter(tool);
   const chip = chipLoad(material, d) * (op === 'finish' && tool.type !== 'flat' ? 0.75 : 1);
-  const feed = Math.round(Math.min(op === 'finish' ? 4000 : 5000, Math.max(100, rpm * Math.max(1, flutes) * chip)) / 10) * 10;
+  const z = Math.max(1, flutes);
+  const cap = op === 'finish' ? Math.min(mach.maxFeed, 4000) : mach.maxFeed;
+  const base = Math.min(mach.maxRpm, Math.max(mach.minRpm, material === 'plastic' ? 16000 : 18000));
+  const rpm = Math.round(Math.min(base, Math.max(mach.minRpm, cap / (z * chip))) / 100) * 100;
+  const feed = Math.round(Math.min(cap, Math.max(100, rpm * z * chip)) / 10) * 10;
   const plunge = Math.round(feed / 3 / 10) * 10;
   const sdK = material === 'aluminum' ? 0.2 : material === 'plastic' ? 0.4 : 0.5;
   return {
@@ -225,14 +524,25 @@ export function recommend(material: Material, tool: Cutter, flutes: number, op: 
 }
 
 /**
+ * Chip load the settings give compared with the chart (1 = on the chart): below ~0.5 the tool rubs
+ * and burns the wood and dulls, above ~1.5 it risks breaking a small cutter.
+ */
+export function chipRatio(material: Material, tool: Cutter, flutes: number, rpm: number, feed: number, op: 'rough' | 'finish'): { actual: number; chart: number; ratio: number } {
+  const chart = chipLoad(material, cutDiameter(tool)) * (op === 'finish' && tool.type !== 'flat' ? 0.75 : 1);
+  const actual = feed / Math.max(1, rpm) / Math.max(1, flutes);
+  return { actual, chart, ratio: actual / chart };
+}
+
+/**
  * Recommended finishing stepover: 10 % of the ball / tip Ø (fine finish in wood, ~0.006 mm
- * scallop) for ball and tapered tools; for a V-bit or engraver the stepover that leaves a 0.02 mm
- * ridge; 25 % of Ø for a flat end mill.
+ * scallop) for ball and tapered tools, but never finer than what leaves a 0.004 mm ridge (tiny
+ * tips would otherwise take forever for nothing you can see); for a V-bit or engraver the stepover
+ * that leaves a 0.02 mm ridge; 25 % of Ø for a flat end mill.
  */
 export function stepoverFor(tool: Cutter): number {
   const r = tool.diameter / 2;
   let s: number;
-  if (tool.type === 'ball' || tool.type === 'taperedBall') s = 0.1 * tool.diameter;
+  if (tool.type === 'ball' || tool.type === 'taperedBall') s = Math.max(0.1 * tool.diameter, 2 * Math.sqrt(Math.max(0, 2 * r * 0.004 - 0.004 ** 2)));
   else if (tool.type === 'flat') s = 0.25 * tool.diameter;
   else s = 2 * (r + 0.02 * Math.tan(((tool.angle / 2) * Math.PI) / 180));
   return Math.round(Math.max(0.02, s) * 1000) / 1000;
@@ -248,14 +558,20 @@ export function scallopHeight(tool: Cutter, stepover: number): number {
 
 export interface GcodeOpts {
   units: 'mm' | 'in';
-  /** safe height above the top of the part (mm) */
+  /** safe height above the top of the stock (mm) */
   safeZ: number;
-  /** Z0 at the top of the part (the highest point) or at its bottom (the bed / spoilboard) */
+  /** Z0 at the top of the stock or at the part bottom (the bed / spoilboard) */
   zZero: 'top' | 'bottom';
-  /** height of the part's top above its bottom (mm) */
-  partTop: number;
+  /** height of the stock top above the part bottom (mm) */
+  stockTop: number;
   /** description lines for the header */
   notes?: string[];
+  /** ramp-in angle (degrees) at the start of each cut; 0 = straight plunge */
+  rampAngle?: number;
+  /** seconds to wait after starting the spindle (G4), 0 = none */
+  spindleDelay?: number;
+  /** between tools in one file: T# M6 (Mach3/4, LinuxCNC, UCCNC, gSender, UGS) or an M0 pause */
+  toolChange?: 'm6' | 'm0';
 }
 
 export const toolLabel = (t: Cutter, fmt: (mm: number) => string): string =>
@@ -272,37 +588,46 @@ export interface GcodeResult {
   seconds: number;
   cutLength: number;
   lines: number;
+  /** run time of each operation (s) */
+  ops: { name: string; seconds: number }[];
 }
 
+/** clearance above the material where rapids down stop (mm) */
+const CLEAR = 1;
+
 /**
- * G-code for one toolpath (one tool). Absolute coordinates, units per mm/inch choice, feed per
- * minute. Rapids only at the safe height; every path starts with a plunge at the plunge rate.
+ * G-code for one or more operations. Absolute coordinates, units per mm/inch choice, feed per
+ * minute. Rapids across only at the safe height; each cut starts with a rapid down to 1 mm above
+ * the material, then a ramp (back and forth along the start of the cut) or a plunge. Several
+ * operations in one file get a tool change between different tools.
  */
-export function writeGcode(tp: Toolpath, o: GcodeOpts): GcodeResult {
+export function writeGcode(input: Toolpath | Toolpath[], o: GcodeOpts): GcodeResult {
+  const ops = Array.isArray(input) ? input : [input];
   const k = o.units === 'in' ? 1 / 25.4 : 1;
   const dec = o.units === 'in' ? 4 : 3;
-  const zOff = o.zZero === 'top' ? o.partTop : 0;
+  const zOff = o.zZero === 'top' ? o.stockTop : 0;
   const n = (v: number) => {
     const s = (v * k).toFixed(dec).replace(/\.?0+$/, '');
     return s === '-0' ? '0' : s;
   };
   const nf = (v: number) => (v * k).toFixed(1).replace(/\.0$/, '');
   const fmtLen = (mm: number) => (o.units === 'in' ? `${n(mm)} in` : `${n(mm)} mm`);
+  const multi = ops.length > 1;
   const L: string[] = [];
-  const safe = o.partTop + o.safeZ;
-  L.push(`(Relief Generator - ${tp.name})`);
-  L.push(`(Tool: ${toolLabel(tp.tool, fmtLen)})`);
-  L.push(`(Zero: X0 Y0 = front-left corner of the part, Z0 = ${o.zZero === 'top' ? 'top of the part' : 'bottom of the part (spoilboard)'})`);
-  L.push(`(Part: ${fmtLen(o.partTop)} tall; spindle ${tp.rpm} rpm, feed ${nf(tp.feed)}, plunge ${nf(tp.plunge)} ${o.units}/min)`);
+  const safe = o.stockTop + o.safeZ;
+  L.push(`(Relief Generator - ${ops.map((t) => t.name).join(', ')})`);
+  for (const t of ops) L.push(`(${multi ? `T${t.number} ` : ''}${t.name}: ${toolLabel(t.tool, fmtLen)}, ${t.rpm} rpm, feed ${nf(t.feed)}, plunge ${nf(t.plunge)} ${o.units}/min)`);
+  L.push(`(Zero: X0 Y0 = front-left corner of the part, Z0 = ${o.zZero === 'top' ? 'top of the stock' : 'bottom of the part (spoilboard)'})`);
+  L.push(`(Stock top ${fmtLen(o.stockTop)} above the part bottom)`);
   for (const s of o.notes ?? []) L.push(`(${s.replace(/[()]/g, '')})`);
   L.push('G90 G94 G17');
   L.push(o.units === 'in' ? 'G20' : 'G21');
   L.push(`G0 Z${n(safe - zOff)}`);
-  L.push(`M3 S${Math.round(tp.rpm)}`);
   let cur = { x: 0, y: 0, z: safe };
   let mode = '';
   let feed = -1;
-  let cutLen = 0, plungeLen = 0, rapidLen = 0;
+  let cutLen = 0, plungeLen = 0, rapidLen = 0, time = 0;
+  let tp = ops[0];
   const move = (g: 'G0' | 'G1', x: number, y: number, z: number, f?: number) => {
     const parts: string[] = [];
     if (g !== mode) parts.push(g);
@@ -315,50 +640,137 @@ export function writeGcode(tp: Toolpath, o: GcodeOpts): GcodeResult {
       feed = f;
     }
     const d = Math.hypot(x - cur.x, y - cur.y, z - cur.z);
-    if (g === 'G0') rapidLen += d;
-    else if (f === tp.plunge) plungeLen += d;
-    else cutLen += d;
+    if (g === 'G0') {
+      rapidLen += d;
+      time += d / 5000;
+    } else {
+      if (f === tp.plunge) plungeLen += d;
+      else cutLen += d;
+      time += d / (f ?? tp.feed);
+    }
     mode = g;
     L.push(parts.join(' '));
     cur = { x, y, z };
   };
-  // the first move of the file goes up before going across
-  L.push('G0 X0 Y0');
-  mode = 'G0';
-  for (const p of tp.paths) {
-    if (p.length < 3) continue;
-    move('G0', cur.x, cur.y, safe);
-    move('G0', p[0], p[1], safe);
-    move('G1', p[0], p[1], p[2], tp.plunge);
-    for (let i = 3; i < p.length; i += 3) {
-      // a move that goes down steeply is a plunge
-      const dz = cur.z - p[i + 2], dxy = Math.hypot(p[i] - cur.x, p[i + 1] - cur.y);
-      move('G1', p[i], p[i + 1], p[i + 2], dz > 0.5 && dz > 2 * dxy ? tp.plunge : tp.feed);
+  const tanA = Math.tan((Math.min(45, Math.max(0, o.rampAngle ?? 0)) * Math.PI) / 180);
+
+  /** goes down from the current height to the start of path p, ramping along it when it can */
+  const enter = (p: Path, zr: number) => {
+    const z0 = p[2], drop = zr - z0;
+    if (drop <= 1e-6) return;
+    const maxLen = Math.min(20, Math.max(3, 3 * tp.tool.diameter));
+    // the start of the path, up to maxLen along it: [x, y, z, s]
+    const pts: number[][] = [[p[0], p[1], p[2], 0]];
+    for (let i = 3; i < p.length && pts[pts.length - 1][3] < maxLen; i += 3) {
+      const q = pts[pts.length - 1];
+      const d = Math.hypot(p[i] - q[0], p[i + 1] - q[1]);
+      if (d < 1e-9) continue;
+      if (q[3] + d <= maxLen) pts.push([p[i], p[i + 1], p[i + 2], q[3] + d]);
+      else {
+        const w = (maxLen - q[3]) / d;
+        pts.push([q[0] + (p[i] - q[0]) * w, q[1] + (p[i + 1] - q[1]) * w, q[2] + (p[i + 2] - q[2]) * w, maxLen]);
+      }
     }
-  }
+    const R = pts[pts.length - 1][3];
+    const pairs = tanA > 0 && R >= 1 ? Math.ceil(drop / (2 * R * tanA) - 1e-9) : Infinity;
+    if (drop <= CLEAR + 1e-6 || pairs > 40) {
+      move('G1', p[0], p[1], z0, tp.plunge);
+      return;
+    }
+    // back and forth along the start of the path, going down evenly, never below the path itself
+    const slope = drop / (2 * pairs * R);
+    let travelled = 0, sPrev = 0;
+    for (let q = 0; q < pairs; q++)
+      for (const leg of [pts.slice(1), pts.slice(0, -1).reverse()])
+        for (const pt of leg) {
+          travelled += Math.abs(pt[3] - sPrev);
+          sPrev = pt[3];
+          move('G1', pt[0], pt[1], Math.max(pt[2], zr - slope * travelled), tp.feed);
+        }
+    move('G1', p[0], p[1], z0, tp.feed);
+  };
+
+  const opTimes: { name: string; seconds: number }[] = [];
+  ops.forEach((t, oi) => {
+    const t0 = time;
+    const prevTool = oi > 0 ? ops[oi - 1] : null;
+    tp = t;
+    if (!prevTool || prevTool.number !== t.number) {
+      if (prevTool) {
+        move('G0', cur.x, cur.y, safe);
+        L.push('M5');
+        mode = '';
+      }
+      if (multi) {
+        L.push(`(${prevTool ? 'TOOL CHANGE: ' : ''}T${t.number} = ${toolLabel(t.tool, fmtLen)}${prevTool ? ' - change the tool, set Z0 again, then continue' : ''})`);
+        if (o.toolChange === 'm0' && prevTool) L.push('M0');
+        else if (o.toolChange !== 'm0') L.push(`T${t.number} M6`);
+      }
+      L.push(`M3 S${Math.round(t.rpm)}`);
+      if ((o.spindleDelay ?? 0) > 0) {
+        L.push(`G4 P${o.spindleDelay}`);
+        time += o.spindleDelay! / 60;
+      }
+    } else if (prevTool.rpm !== t.rpm) L.push(`S${Math.round(t.rpm)}`);
+    if (multi) L.push(`(${t.name})`);
+    if (oi === 0) {
+      // the first move of the file goes up before going across
+      L.push('G0 X0 Y0');
+      mode = 'G0';
+      cur = { ...cur, x: 0, y: 0 };
+    }
+    t.paths.forEach((p, pi) => {
+      if (p.length < 3) return;
+      const entry = t.entry?.[pi] ?? o.stockTop;
+      const link = pi > 0 ? (t.link?.[pi] ?? NaN) : NaN;
+      if (link < safe) {
+        // a short hop just over the material instead of going up to the safe height
+        const h = Math.max(cur.z, link);
+        move('G0', cur.x, cur.y, h);
+        move('G0', p[0], p[1], h);
+        // rapid down to just over the material, then feed in
+        move('G0', p[0], p[1], Math.min(h, Math.max(p[2], entry + 0.05)));
+        move('G1', p[0], p[1], p[2], t.plunge);
+      } else {
+        move('G0', cur.x, cur.y, safe);
+        move('G0', p[0], p[1], safe);
+        // rapid down to just above the material, then ramp or plunge in
+        const zr = Math.min(safe, Math.max(p[2], entry + CLEAR));
+        move('G0', p[0], p[1], zr);
+        enter(p, zr);
+      }
+      for (let i = 3; i < p.length; i += 3) {
+        // a move that goes down steeply is a plunge
+        const dz = cur.z - p[i + 2], dxy = Math.hypot(p[i] - cur.x, p[i + 1] - cur.y);
+        move('G1', p[i], p[i + 1], p[i + 2], dz > 0.5 && dz > 2 * dxy ? t.plunge : t.feed);
+      }
+    });
+    opTimes.push({ name: t.name, seconds: (time - t0) * 60 });
+  });
   move('G0', cur.x, cur.y, safe);
   L.push('M5');
   mode = '';
   move('G0', 0, 0, safe);
   L.push('M30');
-  const seconds = (cutLen / tp.feed + plungeLen / tp.plunge + rapidLen / 5000) * 60;
-  return { text: L.join('\n') + '\n', seconds, cutLength: cutLen, lines: L.length };
+  return { text: L.join('\n') + '\n', seconds: time * 60, cutLength: cutLen, lines: L.length, ops: opTimes };
 }
 
 /** line-segment vertex list (x, y, z pairs) of the toolpaths for the 3D preview, links included */
-export function previewSegments(paths: Path[], safe: number, maxSegs = 400_000): Float32Array {
+export function previewSegments(paths: Path[], safe: number, maxSegs = 400_000, link?: number[]): Float32Array {
   let total = 0;
   for (const p of paths) total += p.length / 3 + 2;
   const step = Math.max(1, Math.ceil(total / maxSegs));
   const out: number[] = [];
   let last: [number, number, number] | null = null;
   const seg = (a: [number, number, number], b: [number, number, number]) => out.push(a[0], a[1], a[2], b[0], b[1], b[2]);
-  for (const p of paths) {
+  paths.forEach((p, pi) => {
+    if (p.length < 3) return;
     const first: [number, number, number] = [p[0], p[1], p[2]];
     if (last) {
-      seg(last, [last[0], last[1], safe]);
-      seg([last[0], last[1], safe], [first[0], first[1], safe]);
-      seg([first[0], first[1], safe], first);
+      const h = link && link[pi] < safe ? Math.max(link[pi], last[2]) : safe;
+      seg(last, [last[0], last[1], h]);
+      seg([last[0], last[1], h], [first[0], first[1], h]);
+      seg([first[0], first[1], h], first);
     }
     let prev = first;
     const np = p.length / 3;
@@ -369,6 +781,6 @@ export function previewSegments(paths: Path[], safe: number, maxSegs = 400_000):
       prev = cur;
     }
     last = prev;
-  }
+  });
   return Float32Array.from(out);
 }

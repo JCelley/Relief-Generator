@@ -91,8 +91,39 @@ export interface ReliefParams {
   roughFlutes: number;
   /** safe height above the top of the part for rapid moves (mm) */
   safeZ: number;
-  /** Z0 at the top of the part or at its bottom (spoilboard) */
+  /** Z0 at the top of the stock or at the part bottom (spoilboard) */
   zZero: 'top' | 'bottom';
+  /** stock thickness (mm); 0 = exactly the part height (base + relief) */
+  stockThick: number;
+  /** ramp-in angle (degrees) at the start of each cut, 0 = straight plunge */
+  rampAngle: number;
+  /** wait after starting the spindle (s) */
+  spindleDelay: number;
+  /** tool change in the all-in-one file: T# M6, or an M0 pause (plain GRBL) */
+  toolChange: 'm6' | 'm0';
+  /** machine: spindle top speed (rpm) and fastest feed (mm/min), caps for the recommendations */
+  minRpm: number;
+  maxRpm: number;
+  maxFeed: number;
+  /** detail (rest machining) pass with a smaller tool where the finishing tool cannot reach */
+  detailOn: boolean;
+  detailType: 'ball' | 'taperedBall' | 'vbit';
+  detailDiameter: number;
+  detailAngle: number;
+  detailStepover: number;
+  detailFlutes: number;
+  detailRpm: number;
+  detailFeed: number;
+  detailPlunge: number;
+  /** cutout: profile around the part with the roughing tool, through the stock, with tabs */
+  cutoutOn: boolean;
+  /** tabs per side (0 = none), their length and height (mm) */
+  cutoutTabs: number;
+  cutoutTabW: number;
+  cutoutTabH: number;
+  /** depth below the part bottom (mm) */
+  cutoutThrough: number;
+  cutoutDir: 'climb' | 'conventional';
 
   /** lithophane: thickness of the lightest areas (mm) */
   lithoMin: number;
@@ -180,12 +211,34 @@ export const DEFAULT_PARAMS: ReliefParams = {
   roughStepdown: 3.18,
   roughStepover: 2.54,
   roughAllowance: 0.5,
-  roughRpm: 18000,
-  roughFeed: 5000,
-  roughPlunge: 1670,
+  roughRpm: 10900,
+  roughFeed: 4980,
+  roughPlunge: 1660,
   roughFlutes: 2,
   safeZ: 5,
   zZero: 'top',
+  stockThick: 0,
+  rampAngle: 5,
+  spindleDelay: 3,
+  toolChange: 'm6',
+  minRpm: 10000,
+  maxRpm: 24000,
+  maxFeed: 5000,
+  detailOn: false,
+  detailType: 'taperedBall',
+  detailDiameter: 0.5,
+  detailAngle: 10,
+  detailStepover: 0.089,
+  detailFlutes: 2,
+  detailRpm: 18000,
+  detailFeed: 970,
+  detailPlunge: 320,
+  cutoutOn: false,
+  cutoutTabs: 2,
+  cutoutTabW: 6,
+  cutoutTabH: 2,
+  cutoutThrough: 0.3,
+  cutoutDir: 'climb',
   lithoMin: 0.8,
   lithoMax: 3.0,
   lithoBorder: 3,
@@ -225,5 +278,26 @@ export function effectiveGridSpacing(p: ReliefParams): number {
   if (p.gridSpacing > 0) return p.gridSpacing;
   // a sharp or tiny-tipped V-bit would give a needlessly fine grid
   const d = Math.max(p.toolDiameter, p.toolType === 'ball' ? 0.2 : 0.8);
-  return d / 4;
+  // a detail pass needs a grid fine enough to show what its smaller tool gets into, but the photo's
+  // depth holds nothing much finer than 0.2 mm on a typical part
+  const dd = p.mode === 'relief' && p.detailOn ? Math.max(0.2, Math.max(p.detailDiameter, p.detailType === 'ball' ? 0.2 : 0.4) / 4) : Infinity;
+  return Math.min(d / 4, dd);
+}
+
+/** settings that only change the G-code, not the relief (changing them needs no recompute) */
+export const CAM_KEYS = [
+  'camMaterial', 'finStepover', 'finDir', 'finRpm', 'finFeed', 'finPlunge', 'finFlutes',
+  'roughOn', 'roughType', 'roughDiameter', 'roughStepdown', 'roughStepover', 'roughAllowance', 'roughRpm', 'roughFeed', 'roughPlunge', 'roughFlutes',
+  'safeZ', 'zZero', 'stockThick', 'rampAngle', 'spindleDelay', 'toolChange', 'minRpm', 'maxRpm', 'maxFeed',
+  'detailOn', 'detailType', 'detailDiameter', 'detailAngle', 'detailStepover', 'detailFlutes', 'detailRpm', 'detailFeed', 'detailPlunge',
+  'cutoutOn', 'cutoutTabs', 'cutoutTabW', 'cutoutTabH', 'cutoutThrough', 'cutoutDir',
+] as const satisfies readonly (keyof ReliefParams)[];
+
+/** the settings the relief / lithophane surface depends on, as a cache key */
+export function geometryKey(p: ReliefParams): string {
+  const g: Record<string, unknown> = { ...p };
+  for (const k of CAM_KEYS) delete g[k];
+  // the detail tool sets the grid spacing when it is on
+  g.grid = effectiveGridSpacing(p);
+  return JSON.stringify(g);
 }

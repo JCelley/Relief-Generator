@@ -22,20 +22,25 @@ export type ModelResponse =
 
 // ---- compute worker ----------------------------------------------------------------------------
 /** what the Export buttons produce */
-export type ExportKind = StepKind | 'stl' | '3mf' | 'png' | 'stand' | 'gcodeRough' | 'gcodeFinish';
+export type ExportKind = StepKind | 'stl' | '3mf' | 'png' | 'stand' | 'wedge' | 'gcode' | 'setup';
+/** which G-code: one operation, or all of them in one file with tool changes */
+export type GcodeOp = 'roughing' | 'finishing' | 'detail' | 'cutout' | 'all';
 
 export type ComputeRequest =
   /** photo: the analysed photo (models: false = luminance only, enough for a lithophane); lamp: all lamp pictures side by side */
   | { type: 'inputs'; raw: RawInputs; slot: 'photo' | 'lamp'; models: boolean; panels?: number }
   | { type: 'params'; id: number; params: ReliefParams; view: 'design' | 'cut' | 'reach'; toolpaths?: boolean }
-  | { type: 'export'; id: number; params: ReliefParams; kind: ExportKind; name: string; units?: 'mm' | 'in' };
+  | { type: 'export'; id: number; params: ReliefParams; kind: ExportKind; name: string; units?: 'mm' | 'in'; op?: GcodeOp };
 
 /** toolpaths for the 3D view: line segments in part coordinates, and estimated run times (s) */
 export interface PreviewPaths {
-  rough: Float32Array | null;
-  finish: Float32Array;
-  roughSec: number;
-  finishSec: number;
+  /** each operation in machining order with its estimated run time (s) */
+  ops: { name: string; segs: Float32Array; sec: number }[];
+  /** all of them in one file */
+  total: number;
+  /** stock top and the height of Z0 above the part bottom (mm) */
+  stockTop: number;
+  zeroZ: number;
 }
 
 /** lithophane mesh for the preview (decimated) */
@@ -62,6 +67,8 @@ export interface ReliefStats {
   /** cutter simulation: fraction of the surface the tool cannot reach, and the most left there */
   missedFrac?: number;
   maxLeft?: number;
+  /** area the detail pass works on (mm²) */
+  detailArea?: number;
 }
 
 export type ComputeResponse =
