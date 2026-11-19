@@ -17,7 +17,7 @@
     <main>
       <aside id="panel">
         <section>
-          <label class="drop" id="drop">
+          <label class="drop" id="drop" title="A clear photo of one subject works best: good even light, the subject large in the frame. JPG, PNG or WebP.">
             <input type="file" id="file" accept="image/*" hidden />
             <strong>Drop a photo</strong> or click to choose
           </label>
@@ -25,7 +25,7 @@
             <span></span>
             <button type="button" class="small" id="cropBtn" title="Rotate the photo or keep only part of it">Crop / rotate…</button>
           </div>
-          <div class="row">
+          <div class="row" title="Finds the subject and separates it from the background. BiRefNet: best for pets, objects and most photos. ormbg: people. MODNet: head-and-shoulders portraits, fastest. None: keep the whole photo (landscapes, scenes).">
             <label for="maskModel">Subject mask</label>
             <select id="maskModel">
               <option value="birefnet">BiRefNet lite (general, best)</option>
@@ -34,7 +34,7 @@
               <option value="none">None (whole photo)</option>
             </select>
           </div>
-          <div class="row">
+          <div class="row" title="Where the depth and mask models run. WebGPU uses the graphics card and is much faster; WASM runs on the CPU and works everywhere. Auto picks WebGPU when the browser supports it.">
             <label for="deviceSel">Compute</label>
             <select id="deviceSel">
               <option value="auto">Auto (WebGPU if available)</option>
@@ -45,24 +45,24 @@
           <div id="status" class="status">Load a photo to begin.</div>
           <div id="maskWarn" class="warn" hidden>
             <span id="maskWarnText"></span>
-            <button id="maskWarnRetry" class="small"></button>
+            <button id="maskWarnRetry" class="small" title="Run the mask again with the suggested setting"></button>
           </div>
         </section>
 
         <section>
           <h2>Size</h2>
-          <div class="row">
+          <div class="row" title="Units for every length, feed and the G-code (G20 inches / G21 mm). Settings are stored in mm, so switching does not change the part.">
             <label for="units">Units</label>
             <select id="units">
               <option value="in">inches</option>
               <option value="mm">mm</option>
             </select>
           </div>
-          <div class="row">
+          <div class="row" title="Finished width of the part (lamp shade: worked out from the diameter). The height follows the photo's proportions.">
             <label for="width">Width</label>
             <input type="number" id="width" step="0.01" min="0.1" />
           </div>
-          <div class="row">
+          <div class="row" title="Follows from the width and the photo's proportions. Crop the photo to change it.">
             <label>Height</label>
             <output id="heightOut">–</output>
           </div>
@@ -77,7 +77,7 @@
               <option value="lithophane">Lithophane (3D print)</option>
             </select>
           </div>
-          <div class="row" id="presetRow">
+          <div class="row" id="presetRow" title="Starting settings tuned for the kind of picture. Pick the closest one first, then adjust the sliders.">
             <label for="preset">Preset</label>
             <select id="preset">
               <option value="portrait">Portrait</option>
@@ -89,14 +89,14 @@
           </div>
           <div class="row" id="presetModRow" hidden>
             <span></span>
-            <span class="preset-mod"><span id="presetModText">Sliders changed from the preset</span> <button type="button" class="small" id="presetReset">Reset</button></span>
+            <span class="preset-mod"><span id="presetModText">Sliders changed from the preset</span> <button type="button" class="small" id="presetReset" title="Put the sliders back to the preset's values">Reset</button></span>
           </div>
           <div id="basic"></div>
           <div id="lampBox" class="lamp" hidden>
             <div class="lamp-head">
               <span>Pictures around the lamp <span id="lampCount"></span></span>
-              <label class="small-btn">Add pictures…<input type="file" id="lampFiles" accept="image/*" multiple hidden /></label>
-              <button type="button" class="small" id="lampClear">Clear</button>
+              <label class="small-btn" title="Add one or more pictures to go around the lamp">Add pictures…<input type="file" id="lampFiles" accept="image/*" multiple hidden /></label>
+              <button type="button" class="small" id="lampClear" title="Remove all the lamp pictures">Clear</button>
             </div>
             <div id="lampList" class="lamp-list"></div>
             <div class="lamp-hint">They wrap around in this order, left to right as seen from outside. Use 6 or more frames of a scene that changes a little each time (frames from a video work well) to make an animation as it turns. Drop pictures here too.</div>
@@ -120,11 +120,11 @@
             <div id="advanced"></div>
             <div class="row">
               <span></span>
-              <span class="preset-mod">Everything except size, relief height, base and G-code settings <button type="button" class="small" id="resetAll">Reset all</button></span>
+              <span class="preset-mod">Everything except size, relief height, base and G-code settings <button type="button" class="small" id="resetAll" title="Put every relief and lithophane setting back to its default (size, relief height, base and G-code settings are kept)">Reset all</button></span>
             </div>
             <div class="row" title="Keep a job's settings next to its photo, or move your setup to another computer">
               <span>Settings file</span>
-              <span class="preset-mod"><button type="button" class="small" id="saveSettings">Save…</button> <label class="small-btn">Load…<input type="file" id="settingsFile" accept=".json,application/json" hidden /></label></span>
+              <span class="preset-mod"><button type="button" class="small" id="saveSettings" title="Download every setting as a .json file">Save…</button> <label class="small-btn" title="Read settings back from a saved .json file">Load…<input type="file" id="settingsFile" accept=".json,application/json" hidden /></label></span>
             </div>
           </details>
         </section>
@@ -175,9 +175,9 @@
           <div class="hud">
             <div id="dims">–</div>
             <div class="lightctl">
-              <label>Light azimuth <input type="range" id="lightAz" min="0" max="360" value="135" /></label>
-              <label>Light elevation <input type="range" id="lightEl" min="3" max="90" value="25" /></label>
-              <label>Finish
+              <label title="Direction the light comes from, around the part (preview only)">Light azimuth <input type="range" id="lightAz" min="0" max="360" value="135" /></label>
+              <label title="How high the light is. Low light shows the depth and detail best, like raking light on a carving (preview only).">Light elevation <input type="range" id="lightEl" min="3" max="90" value="25" /></label>
+              <label title="Material look in the preview only. Backlit shows a lithophane lit from behind.">Finish
                 <select id="finish">
                   <option value="clay">Clay</option>
                   <option value="wood">Wood</option>
@@ -185,7 +185,7 @@
                   <option value="backlit">Backlit</option>
                 </select>
               </label>
-              <label>Background
+              <label title="Background colour of the 3D view">Background
                 <select id="backdrop">
                   <option value="light">Light</option>
                   <option value="dark">Dark</option>
@@ -204,7 +204,7 @@
               <label id="strobeCtl" title="Simulates a strobe light that flashes each time the next picture faces you, so the pictures play like a flip book. A real lamp needs a strobe (or a zoetrope with slits) synced to its speed to look like this; under steady light the pictures just slide past.">
                 <input type="checkbox" id="strobe" /> Animate (strobe) <span id="fps"></span>
               </label>
-              <button id="resetView" class="small">Reset view</button>
+              <button id="resetView" class="small" title="Back to the starting camera position">Reset view</button>
             </div>
           </div>
         </div>

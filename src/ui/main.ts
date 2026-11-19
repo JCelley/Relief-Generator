@@ -13,6 +13,7 @@ import { photoLuminance, LampImages, cropDialog } from './images';
 import { recommend, stepoverFor, scallopHeight, chipRatio, toolLabel, type Material } from '../core/cam';
 import type { Cutter, ToolType } from '../core/cutter';
 import { loadTools, saveTools, defaultName, sameTool, type LibTool } from './tools';
+import { initTooltips } from './tooltip';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const MM_PER_IN = 25.4;
@@ -964,6 +965,7 @@ function doExport(kind: ExportKind, label: string, op?: GcodeOp) {
 
 // ---- wiring --------------------------------------------------------------------------------------
 buildFields();
+initTooltips();
 if (saved.preset) ($('preset') as HTMLSelectElement).value = saved.preset;
 if (saved.maskModel) ($('maskModel') as HTMLSelectElement).value = saved.maskModel;
 if (saved.device) ($('deviceSel') as HTMLSelectElement).value = saved.device;

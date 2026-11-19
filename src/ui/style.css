@@ -25,7 +25,7 @@ aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; c
 .row label { color: var(--muted); font-size: 13px; }
 .row.range { grid-template-columns: 112px 1fr 96px; }
 .row.range output { text-align: right; font-variant-numeric: tabular-nums; font-size: 12.5px; }
-.row[title] label { text-decoration: underline dotted #555; text-underline-offset: 3px; cursor: help; }
+.row[title] label, .row[data-tip] label { text-decoration: underline dotted #555; text-underline-offset: 3px; cursor: help; }
 input[type='number'], select { width: 100%; background: #121314; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; font: inherit; }
 input[type='range'] { width: 100%; accent-color: var(--accent); }
 input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px; }
@@ -118,3 +118,4 @@ div.cam-note { margin: 2px 0 4px; }
 .row.lib select { min-width: 0; }
 .lib-btns { display: flex; gap: 4px; }
 #camWarn { white-space: pre-line; margin-top: 8px; }
+#tip { position: fixed; z-index: 1000; max-width: 320px; padding: 7px 10px; border-radius: 6px; background: #2b2c2f; color: var(--text); border: 1px solid #45474b; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45); font-size: 12.5px; line-height: 1.45; pointer-events: none; white-space: pre-line; }
