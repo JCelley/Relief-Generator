@@ -22,13 +22,21 @@ export type ModelResponse =
 
 // ---- compute worker ----------------------------------------------------------------------------
 /** what the Export buttons produce */
-export type ExportKind = StepKind | 'stl' | '3mf' | 'png' | 'stand';
+export type ExportKind = StepKind | 'stl' | '3mf' | 'png' | 'stand' | 'gcodeRough' | 'gcodeFinish';
 
 export type ComputeRequest =
   /** photo: the analysed photo (models: false = luminance only, enough for a lithophane); lamp: all lamp pictures side by side */
   | { type: 'inputs'; raw: RawInputs; slot: 'photo' | 'lamp'; models: boolean; panels?: number }
-  | { type: 'params'; id: number; params: ReliefParams; view: 'design' | 'cut' | 'reach' }
-  | { type: 'export'; id: number; params: ReliefParams; kind: ExportKind; name: string };
+  | { type: 'params'; id: number; params: ReliefParams; view: 'design' | 'cut' | 'reach'; toolpaths?: boolean }
+  | { type: 'export'; id: number; params: ReliefParams; kind: ExportKind; name: string; units?: 'mm' | 'in' };
+
+/** toolpaths for the 3D view: line segments in part coordinates, and estimated run times (s) */
+export interface PreviewPaths {
+  rough: Float32Array | null;
+  finish: Float32Array;
+  roughSec: number;
+  finishSec: number;
+}
 
 /** lithophane mesh for the preview (decimated) */
 export interface PreviewMesh {
@@ -58,7 +66,7 @@ export interface ReliefStats {
 
 export type ComputeResponse =
   | { type: 'prepared'; mask: Grid; depth: Grid }
-  | { type: 'relief'; id: number; z: Float32Array; nx: number; ny: number; stats: ReliefStats; left?: Float32Array; mesh?: PreviewMesh }
+  | { type: 'relief'; id: number; z: Float32Array; nx: number; ny: number; stats: ReliefStats; left?: Float32Array; mesh?: PreviewMesh; paths?: PreviewPaths }
   | { type: 'exported'; id: number; kind: ExportKind; bytes: Uint8Array; info: string }
   | { type: 'progress'; id: number; message: string }
   | { type: 'error'; id: number; message: string };

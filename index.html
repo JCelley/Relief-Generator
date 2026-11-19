@@ -125,6 +125,20 @@
           </details>
         </section>
 
+        <section id="camSection">
+          <h2>G-code (3-axis router)</h2>
+          <div id="cam"></div>
+          <div class="row">
+            <span></span>
+            <button type="button" class="small" id="camRecommend" title="Fills in speeds, feeds, stepdown and stepovers for the chosen material and tools">Use recommended</button>
+          </div>
+          <div id="camInfo" class="status"></div>
+          <div class="exports two">
+            <button id="expRough" disabled title="Roughing toolpath (roughing tool)">Roughing G-code</button>
+            <button id="expFinish" disabled title="Finishing toolpath (finishing tool)">Finishing G-code</button>
+          </div>
+        </section>
+
         <section>
           <h2>Export</h2>
           <div class="exports">
@@ -174,6 +188,7 @@
                   <option value="reach">Missed areas</option>
                 </select>
               </label>
+ <label id="pathCtl" title="Draws the roughing (orange) and finishing (blue) toolpaths over the part"><input type="checkbox" id="showPaths" /> Toolpaths</label>
               <button id="spin" class="small" title="Turn the part (a lamp shade turns about its own axis)">Spin</button>
               <label title="Turns per minute">rpm <input type="number" id="rpm" value="10" min="1" max="300" step="1" class="rpm" /></label>
               <label id="strobeCtl" title="Simulates a strobe light that flashes each time the next picture faces you, so the pictures play like a flip book. A real lamp needs a strobe (or a zoetrope with slits) synced to its speed to look like this; under steady light the pictures just slide past.">

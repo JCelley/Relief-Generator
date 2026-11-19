@@ -13,11 +13,14 @@ export type Field =
       advanced?: boolean;
       litho?: boolean;
       help?: string;
+      /** a feed rate (mm/min): shown per minute in the current units */
+      rate?: boolean;
+      cam?: boolean;
       /** common values offered in the number box's drop-down (mm for lengths) */
       presets?: [number, string][];
     }
-  | { key: keyof ReliefParams; label: string; kind: 'select'; options: [string, string][]; advanced?: boolean; litho?: boolean; help?: string }
-  | { key: keyof ReliefParams; label: string; kind: 'check'; advanced?: boolean; litho?: boolean; help?: string };
+  | { key: keyof ReliefParams; label: string; kind: 'select'; options: [string, string][]; advanced?: boolean; litho?: boolean; cam?: boolean; help?: string }
+  | { key: keyof ReliefParams; label: string; kind: 'check'; advanced?: boolean; litho?: boolean; cam?: boolean; help?: string };
 
 /** `length: true` fields are lengths in mm and follow the mm/inch toggle. */
 export const FIELDS: Field[] = [
@@ -101,6 +104,7 @@ export const FIELDS: Field[] = [
       ['ball', 'Ball end mill'],
       ['taperedBall', 'Tapered ball nose'],
       ['vbit', 'V-bit / engraver'],
+      ['flat', 'Flat end mill'],
     ],
     help: 'The tool for the finishing pass. Used to show what will actually be cut (Show: As cut / Missed areas in the 3D view) and to set the grid spacing. The exported surface is the design itself; Fusion does the cutting.',
   },
@@ -142,6 +146,70 @@ export const FIELDS: Field[] = [
     help: 'Cuts clearly dark areas in (and raises light ones) by this depth, e.g. pupils and highlights in drawings. Depth from a photo cannot see painted features. Keep 0 for photos: shadows and dark hair would become dents.',
   },
   { key: 'toneDarkUp', label: 'Raise dark areas', kind: 'check', help: 'Tone carving: raise dark areas instead of cutting them in.' },
+
+  // G-code (cam: true → the G-code section)
+  {
+    key: 'camMaterial',
+    label: 'Material',
+    kind: 'select',
+    options: [
+      ['softwood', 'Softwood (pine, cedar)'],
+      ['hardwood', 'Hardwood (oak, maple, walnut)'],
+      ['mdf', 'MDF / plywood'],
+      ['plastic', 'Plastic (acrylic, HDPE)'],
+      ['aluminum', 'Aluminum'],
+    ],
+    cam: true,
+    help: 'Sets the recommended speeds and feeds (Use recommended).',
+  },
+  { key: 'roughOn', label: 'Roughing pass', kind: 'check', cam: true, help: 'Clears the bulk of the material level by level with a larger tool first, leaving a little for the finishing pass. Needed unless the relief is shallow and the material soft.' },
+  {
+    key: 'roughType',
+    label: 'Roughing tool',
+    kind: 'select',
+    options: [
+      ['flat', 'Flat end mill'],
+      ['ball', 'Ball end mill'],
+    ],
+    cam: true,
+  },
+  { key: 'roughDiameter', label: 'Roughing Ø', kind: 'range', min: 1, max: 25.4, step: 0.0125, unit: 'mm', length: true, cam: true, presets: [[3.175, '1/8"'], [6.35, '1/4"'], [9.525, '3/8"'], [12.7, '1/2"'], [3, '3 mm'], [6, '6 mm'], [8, '8 mm']] },
+  { key: 'roughFlutes', label: 'Roughing flutes', kind: 'range', min: 1, max: 4, step: 1, cam: true },
+  { key: 'roughStepdown', label: 'Stepdown', kind: 'range', min: 0.1, max: 12, step: 0.05, unit: 'mm', length: true, cam: true, help: 'Depth per roughing level. About half the tool Ø in wood, a quarter or less in aluminium.' },
+  { key: 'roughStepover', label: 'Rough stepover', kind: 'range', min: 0.1, max: 20, step: 0.05, unit: 'mm', length: true, cam: true, help: 'Distance between roughing lines. About 40 % of the tool Ø.' },
+  { key: 'roughAllowance', label: 'Leave for finish', kind: 'range', min: 0, max: 3, step: 0.05, unit: 'mm', length: true, cam: true, help: 'Material the roughing pass leaves on the surface for the finishing pass to clean up.' },
+  { key: 'roughRpm', label: 'Rough spindle', kind: 'range', min: 1000, max: 30000, step: 100, unit: 'rpm', cam: true },
+  { key: 'roughFeed', label: 'Rough feed', kind: 'range', min: 50, max: 10000, step: 10, unit: 'mm', length: true, rate: true, cam: true },
+  { key: 'roughPlunge', label: 'Rough plunge', kind: 'range', min: 20, max: 5000, step: 10, unit: 'mm', length: true, rate: true, cam: true },
+  { key: 'finStepover', label: 'Finish stepover', kind: 'range', min: 0.02, max: 5, step: 0.005, unit: 'mm', length: true, cam: true, help: 'Distance between finishing lines (uses the finishing tool above). Smaller = smoother but longer. Recommended: 10 % of the ball / tip Ø; the ridge height it leaves is shown below.' },
+  {
+    key: 'finDir',
+    label: 'Finish direction',
+    kind: 'select',
+    options: [
+      ['x', 'Along X'],
+      ['y', 'Along Y'],
+      ['xy', 'X then Y (cross-hatch)'],
+    ],
+    cam: true,
+    help: 'Cross-hatch runs a second pass at 90° for a finer finish (twice the time).',
+  },
+  { key: 'finFlutes', label: 'Finish flutes', kind: 'range', min: 1, max: 4, step: 1, cam: true },
+  { key: 'finRpm', label: 'Finish spindle', kind: 'range', min: 1000, max: 30000, step: 100, unit: 'rpm', cam: true },
+  { key: 'finFeed', label: 'Finish feed', kind: 'range', min: 50, max: 10000, step: 10, unit: 'mm', length: true, rate: true, cam: true },
+  { key: 'finPlunge', label: 'Finish plunge', kind: 'range', min: 20, max: 5000, step: 10, unit: 'mm', length: true, rate: true, cam: true },
+  { key: 'safeZ', label: 'Safe height', kind: 'range', min: 1, max: 50, step: 0.5, unit: 'mm', length: true, cam: true, help: 'Height above the top of the part for rapid moves. Raise it if clamps stick up.' },
+  {
+    key: 'zZero',
+    label: 'Z zero',
+    kind: 'select',
+    options: [
+      ['top', 'Top of the part'],
+      ['bottom', 'Bottom (spoilboard)'],
+    ],
+    cam: true,
+    help: 'Top: touch off on the top of the stock (the stock must be exactly the part height: base + relief). Bottom: touch off on the spoilboard; works with any stock thickness ≥ the part height and is easier to repeat after the tool change.',
+  },
 
   // advanced
   { key: 'baseScale', label: 'Base/detail scale', kind: 'range', min: 0.005, max: 0.2, step: 0.005, advanced: true, help: 'Size of what counts as "large-scale" shape, as a fraction of the image diagonal.' },

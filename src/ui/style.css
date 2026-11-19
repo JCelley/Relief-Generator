@@ -105,3 +105,6 @@ dialog.crop canvas { display: block; margin: 10px auto; touch-action: none; curs
 .num-wrap em { font-style: normal; color: var(--muted); font-size: 11.5px; min-width: 14px; }
 input.rpm { width: 52px; background: #121314; color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 2px 4px; font: inherit; }
 #fps { color: var(--accent); font-variant-numeric: tabular-nums; }
+
+.exports.two { grid-template-columns: 1fr 1fr; margin-top: 8px; }
+#camInfo { white-space: pre-line; }

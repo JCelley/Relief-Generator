@@ -1,6 +1,6 @@
 import type { MachGrid } from './resample';
 
-export type ToolType = 'ball' | 'taperedBall' | 'vbit';
+export type ToolType = 'ball' | 'taperedBall' | 'vbit' | 'flat';
 
 export interface Cutter {
   type: ToolType;
@@ -31,31 +31,11 @@ export interface CutResult {
  */
 export function simulateCut(g: MachGrid, tool: Cutter): CutResult {
   const { nx, ny, dx, dy, z } = g;
-  const r = Math.max(0, tool.diameter / 2);
-  const half = (Math.min(179, Math.max(1, tool.angle)) / 2) * (Math.PI / 180);
-  // cone slope (height per mm of radius); the ball end mill has a straight shank (no cone)
-  const slope = tool.type === 'ball' ? 0 : 1 / Math.tan(half);
-
-  // small part of the tool: height above the tip at offset (di, dj); Infinity = not part of it
-  const offs: { di: number; dj: number; h: number }[] = [];
-  if (r > 0) {
-    const ri = Math.ceil(r / dx), rj = Math.ceil(r / dy);
-    for (let dj = -rj; dj <= rj; dj++)
-      for (let di = -ri; di <= ri; di++) {
-        const d = Math.hypot(di * dx, dj * dy);
-        if (d > r + 1e-9) continue;
-        // sphere for ball / tapered ball, flat disk for an engraver
-        offs.push({ di, dj, h: tool.type === 'vbit' ? 0 : r - Math.sqrt(Math.max(0, r * r - d * d)) });
-      }
-  }
-
+  const { offs, slope } = toolParts(g, tool);
   const n = nx * ny;
-  let t: Float32Array = new Float32Array(z);
-  // dilation (tip height): small part, then cone
-  if (offs.length > 1) t = applyKernel(t, nx, ny, offs, +1);
-  if (slope > 0) propagate(t, nx, ny, dx, dy, slope, +1);
+  const t = tipHeight(g, tool);
   // erosion back down with the same tool (cone, then small part)
-  let c: Float32Array = t;
+  let c: Float32Array = new Float32Array(t);
   if (slope > 0) propagate(c, nx, ny, dx, dy, slope, -1);
   if (offs.length > 1) c = applyKernel(c, nx, ny, offs, -1);
 
@@ -69,6 +49,42 @@ export function simulateCut(g: MachGrid, tool: Cutter): CutResult {
     if (v > maxLeft) maxLeft = v;
   }
   return { cut: c, left, missedFrac: missed / n, maxLeft };
+}
+
+/**
+ * Lowest height the tool tip can be at over each grid point without cutting into the design
+ * (the tool resting on the surface): the toolpath height for a finishing pass.
+ */
+export function tipHeight(g: MachGrid, tool: Cutter): Float32Array {
+  const { nx, ny, dx, dy, z } = g;
+  const { offs, slope } = toolParts(g, tool);
+  let t: Float32Array = new Float32Array(z);
+  if (offs.length > 1) t = applyKernel(t, nx, ny, offs, +1);
+  if (slope > 0) propagate(t, nx, ny, dx, dy, slope, +1);
+  return t;
+}
+
+function toolParts(g: MachGrid, tool: Cutter) {
+  const { dx, dy } = g;
+  const r = Math.max(0, tool.diameter / 2);
+  const half = (Math.min(179, Math.max(1, tool.angle)) / 2) * (Math.PI / 180);
+  // cone slope (height per mm of radius); the ball end mill has a straight shank (no cone)
+  const slope = tool.type === 'ball' || tool.type === 'flat' ? 0 : 1 / Math.tan(half);
+
+  // small part of the tool: height above the tip at offset (di, dj); Infinity = not part of it
+  const offs: { di: number; dj: number; h: number }[] = [];
+  if (r > 0) {
+    const ri = Math.ceil(r / dx), rj = Math.ceil(r / dy);
+    for (let dj = -rj; dj <= rj; dj++)
+      for (let di = -ri; di <= ri; di++) {
+        const d = Math.hypot(di * dx, dj * dy);
+        if (d > r + 1e-9) continue;
+        // sphere for ball / tapered ball, flat disk for an engraver
+        // sphere for ball / tapered ball, flat disk for an engraver or flat end mill
+        offs.push({ di, dj, h: tool.type === 'vbit' || tool.type === 'flat' ? 0 : r - Math.sqrt(Math.max(0, r * r - d * d)) });
+      }
+  }
+  return { offs, slope };
 }
 
 /** sign +1: out(p) = max_o (in(p+o) − h_o)  (dilation); −1: out(p) = min_o (in(p+o) + h_o) */
@@ -124,6 +140,7 @@ export function toolProfile(tool: Cutter, d: number): number {
   const r = tool.diameter / 2;
   const half = ((tool.angle / 2) * Math.PI) / 180;
   if (tool.type === 'ball') return d <= r ? r - Math.sqrt(r * r - d * d) : Infinity;
+  if (tool.type === 'flat') return d <= r ? 0 : Infinity;
   if (tool.type === 'vbit') return d <= r ? 0 : (d - r) / Math.tan(half);
   // tapered ball: sphere up to the tangent point, then the cone
   const rt = r * Math.cos(half);

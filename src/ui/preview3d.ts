@@ -39,6 +39,8 @@ export class ReliefPreview {
   private lithoRest: THREE.Mesh | null = null;
   private lithoH: Float32Array | null = null;
   private finish: Finish = 'clay';
+  /** toolpath overlay (roughing orange, finishing blue) */
+  private pathLines: THREE.LineSegments[] = [];
   private lastZ: { z: Float32Array; nx: number; ny: number } | null = null;
   private size = { w: 100, h: 100, d: 0 };
   private azimuth = 135;
@@ -161,6 +163,35 @@ export class ReliefPreview {
       col.setXYZ(k, b, b * 0.93, b * 0.8);
     }
     col.needsUpdate = true;
+  }
+
+  /**
+   * Draws toolpaths over the relief: line-segment vertex lists in part coordinates (x, y from the
+   * front-left corner, z above the bottom), or nulls to clear.
+   */
+  setToolpaths(rough: Float32Array | null, finish: Float32Array | null) {
+    for (const l of this.pathLines) {
+      this.scene.remove(l);
+      l.geometry.dispose();
+    }
+    this.pathLines = [];
+    const add = (v: Float32Array | null, color: number) => {
+      if (!v || !v.length) return;
+      const p = new Float32Array(v.length);
+      for (let k = 0; k < v.length; k += 3) {
+        p[k] = v[k] - this.size.w / 2;
+        p[k + 1] = v[k + 1] - this.size.h / 2;
+        p[k + 2] = v[k + 2] + 0.02;
+      }
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.BufferAttribute(p, 3));
+      const l = new THREE.LineSegments(geom, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.75 }));
+      this.scene.add(l);
+      this.pathLines.push(l);
+    };
+    add(rough, 0xf0a040);
+    add(finish, 0x4fb3ff);
+    this.requestRender();
   }
 
   /** shows or hides the relief heightfield objects vs the lithophane mesh */

@@ -10,6 +10,7 @@ import { MASK_MODELS } from '../models/infer';
 import { ReliefPreview, Finish } from './preview3d';
 import { backlitBrightness } from '../core/litho';
 import { photoLuminance, LampImages, cropDialog } from './images';
+import { recommend, stepoverFor, scallopHeight } from '../core/cam';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const MM_PER_IN = 25.4;
@@ -121,7 +122,7 @@ function fillPresets(f: Field) {
 
 function buildFields() {
   for (const f of FIELDS) {
-    const host = $(f.advanced ? 'advanced' : 'basic');
+    const host = $(f.advanced ? 'advanced' : 'cam' in f && f.cam ? 'cam' : 'basic');
     const row = document.createElement('div');
     row.className = 'row' + (f.kind === 'range' ? ' range' : '');
     if (f.help) row.title = f.help;
@@ -225,7 +226,7 @@ function syncOutputs(force = false) {
     if (!num || !unit || f.kind !== 'range') continue;
     const v = p[f.key];
     if (force || document.activeElement !== num) num.value = toDisplay(f, v);
-    unit.textContent = f.length ? units : (f.unit ?? '');
+    unit.textContent = f.length ? units + ('rate' in f && f.rate ? '/min' : '') : (f.unit ?? '');
     if (f.key === 'gridSpacing') num.title = v === 0 ? `auto: ${fmtLen(effectiveGridSpacing(params))}` : '';
   }
   // show only the controls that matter for the current mode / method / bg mode
@@ -235,6 +236,10 @@ function syncOutputs(force = false) {
     if (e) (e.input.parentElement as HTMLElement).style.display = on ? '' : 'none';
   };
   for (const { f } of inputs.values()) vis(f.key, Boolean(f.litho) === litho);
+  for (const k of ['roughType', 'roughDiameter', 'roughFlutes', 'roughStepdown', 'roughStepover', 'roughAllowance', 'roughRpm', 'roughFeed', 'roughPlunge'] as const) vis(k, params.roughOn);
+  $('camSection').hidden = litho;
+  $('pathCtl').hidden = litho;
+  updateCamInfo();
   if (!litho) {
     vis('bgLevel', params.bgMode === 'keep');
     vis('baseGamma', params.method === 'baseDetail');
@@ -283,6 +288,25 @@ function updateDims() {
     curvedInfo(s) +
     lampInfo(s) +
     toolInfo(s);
+}
+
+let lastPathTimes: { rough: number; finish: number } | null = null;
+const fmtTime = (s: number) => {
+  const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+  return h ? `${h} h ${m} min` : `${m} min`;
+};
+/** ridge height the finishing stepover leaves, and run times when the toolpaths are shown */
+function updateCamInfo() {
+  const tool = { type: params.toolType, diameter: params.toolDiameter, angle: params.toolAngle };
+  const rec = stepoverFor(tool);
+  let t = `Finish ridges ≈ ${fmtLen(scallopHeight(tool, params.finStepover))} on flat areas (recommended stepover ${fmtLen(rec)}).`;
+  if (params.roughOn && params.roughDiameter <= params.toolDiameter) t += `\nThe roughing tool is not bigger than the finishing tool.`;
+  if (!params.roughOn && params.reliefHeight > 2 * params.toolDiameter)
+    t += `\nNo roughing: the finishing tool cuts the full ${fmtLen(params.reliefHeight)} depth in one pass. Fine for soft material and shallow reliefs only.`;
+  if (lastPathTimes && showPaths())
+    t += `\nEstimated time: ${params.roughOn ? `roughing ${fmtTime(lastPathTimes.rough)}, ` : ''}finishing ${fmtTime(lastPathTimes.finish)}.`;
+  t += `\nX0 Y0 = front-left corner of the part; Z0 = ${params.zZero === 'top' ? 'top of the part' : 'spoilboard'}. One file per tool: re-zero Z after the tool change.`;
+  $('camInfo').textContent = t;
 }
 
 function lampInfo(s: ReliefStats): string {
@@ -396,9 +420,10 @@ function requestRelief() {
   dirty = false;
   showMaskWarning();
   if (isLamp()) sendLampInputs();
-  sendCompute({ type: 'params', id: ++reliefId, params: { ...params }, view: viewMode() });
+  sendCompute({ type: 'params', id: ++reliefId, params: { ...params }, view: viewMode(), toolpaths: showPaths() });
 }
 
+const showPaths = () => params.mode === 'relief' && ($('showPaths') as HTMLInputElement).checked;
 const viewMode = () => ($('view') as HTMLSelectElement).value as 'design' | 'cut' | 'reach';
 
 // ---- lamp shade pictures ------------------------------------------------------------------------
@@ -470,7 +495,7 @@ function setExportsEnabled(on: boolean) {
   // STEP and height maps are for CAM; a lithophane goes to the slicer as STL / 3MF
   const litho = params.mode === 'lithophane';
   const flat = litho && params.lithoShape !== 'curved' && params.lithoShape !== 'lamp';
-  const show: Record<string, boolean> = { expSurface: !litho, expSolid: !litho, expStl: true, exp3mf: litho, expPng: !litho, expStand: flat };
+  const show: Record<string, boolean> = { expSurface: !litho, expSolid: !litho, expStl: true, exp3mf: litho, expPng: !litho, expStand: flat, expRough: !litho && params.roughOn, expFinish: !litho };
   for (const [id, vis] of Object.entries(show)) {
     const b = $(id) as HTMLButtonElement;
     b.hidden = !vis;
@@ -643,7 +668,10 @@ computeWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
       }
       preview.setHeightfield(shown, m.nx, m.ny, m.stats.widthMm, m.stats.heightMm);
       preview.setReach(m.left && view === 'reach' ? m.left : null);
+      lastPathTimes = m.paths ? { rough: m.paths.roughSec, finish: m.paths.finishSec } : null;
     }
+    preview.setToolpaths(m.paths?.rough ?? null, m.paths?.finish ?? null);
+    updateCamInfo();
     drawRelief(shown, m.nx, m.ny, m.stats);
     updateDims();
     setExportsEnabled(true);
@@ -671,6 +699,8 @@ computeWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
       stl: ['', 'stl', 'model/stl'],
       '3mf': ['', '3mf', 'model/3mf'],
       png: ['_heightmap', 'png', 'image/png'],
+      gcodeRough: ['_roughing', 'nc', 'text/plain'],
+      gcodeFinish: ['_finishing', 'nc', 'text/plain'],
       stand: ['_stand', 'stl', 'model/stl'],
     };
     const [suffix, ext, mime] = FILES[m.kind];
@@ -692,7 +722,7 @@ function doExport(kind: ExportKind, label: string) {
   exportKind = label;
   setExportsEnabled(false);
   exportInfo(kind === 'surface' || kind === 'solid' ? 'Fitting B-spline surface…' : `Building ${label}…`);
-  sendCompute({ type: 'export', id: ++exportId, params: { ...params }, kind, name: photoName });
+  sendCompute({ type: 'export', id: ++exportId, params: { ...params }, kind, name: photoName, units });
 }
 
 // ---- wiring --------------------------------------------------------------------------------------
@@ -792,6 +822,31 @@ $('expStl').addEventListener('click', () => doExport('stl', 'STL'));
 $('exp3mf').addEventListener('click', () => doExport('3mf', '3MF'));
 $('expPng').addEventListener('click', () => doExport('png', 'Height map'));
 $('expStand').addEventListener('click', () => doExport('stand', 'Stand STL'));
+$('expRough').addEventListener('click', () => doExport('gcodeRough', 'Roughing G-code'));
+$('expFinish').addEventListener('click', () => doExport('gcodeFinish', 'Finishing G-code'));
+$('showPaths').addEventListener('change', () => {
+  if (!showPaths()) preview.setToolpaths(null, null);
+  updateCamInfo();
+  requestRelief();
+});
+$('camRecommend').addEventListener('click', () => {
+  const mat = params.camMaterial;
+  const fin = recommend(mat, { type: params.toolType, diameter: params.toolDiameter, angle: params.toolAngle }, params.finFlutes, 'finish');
+  const rough = recommend(mat, { type: params.roughType, diameter: params.roughDiameter, angle: 0 }, params.roughFlutes, 'rough');
+  Object.assign(params, {
+    finRpm: fin.rpm,
+    finFeed: fin.feed,
+    finPlunge: fin.plunge,
+    finStepover: fin.stepover,
+    roughRpm: rough.rpm,
+    roughFeed: rough.feed,
+    roughPlunge: rough.plunge,
+    roughStepdown: rough.stepdown,
+    roughStepover: rough.stepover,
+  });
+  syncInputs();
+  onParamsChanged();
+});
 $('view').addEventListener('change', () => {
   updateDims();
   requestRelief();

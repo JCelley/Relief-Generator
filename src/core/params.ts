@@ -57,7 +57,7 @@ export interface ReliefParams {
   maskCleanup: number;
 
   /** finishing tool: ball end mill, tapered ball nose, or V-bit / engraver */
-  toolType: 'ball' | 'taperedBall' | 'vbit';
+  toolType: 'ball' | 'taperedBall' | 'vbit' | 'flat';
   /** finishing tool diameter (mm): ball Ø, tapered-ball tip Ø, or V-bit flat tip Ø (0 = sharp) */
   toolDiameter: number;
   /** tapered ball / V-bit included angle (degrees) */
@@ -66,6 +66,33 @@ export interface ReliefParams {
   gridSpacing: number;
   /** B-spline approximation tolerance (mm) */
   fitTolerance: number;
+
+  /** G-code: material (sets the recommended speeds and feeds) */
+  camMaterial: 'softwood' | 'hardwood' | 'mdf' | 'plastic' | 'aluminum';
+  /** finishing pass (uses the finishing tool above): stepover (mm), raster direction, speeds */
+  finStepover: number;
+  finDir: 'x' | 'y' | 'xy';
+  finRpm: number;
+  /** feed / plunge rate, mm/min */
+  finFeed: number;
+  finPlunge: number;
+  finFlutes: number;
+  /** roughing pass with its own tool */
+  roughOn: boolean;
+  roughType: 'flat' | 'ball';
+  roughDiameter: number;
+  roughStepdown: number;
+  roughStepover: number;
+  /** material left for the finishing pass (mm) */
+  roughAllowance: number;
+  roughRpm: number;
+  roughFeed: number;
+  roughPlunge: number;
+  roughFlutes: number;
+  /** safe height above the top of the part for rapid moves (mm) */
+  safeZ: number;
+  /** Z0 at the top of the part or at its bottom (spoilboard) */
+  zZero: 'top' | 'bottom';
 
   /** lithophane: thickness of the lightest areas (mm) */
   lithoMin: number;
@@ -140,6 +167,25 @@ export const DEFAULT_PARAMS: ReliefParams = {
   toolAngle: 60,
   gridSpacing: 0,
   fitTolerance: 0.01,
+  camMaterial: 'hardwood',
+  finStepover: 0.159,
+  finDir: 'x',
+  finRpm: 18000,
+  finFeed: 1030,
+  finPlunge: 340,
+  finFlutes: 2,
+  roughOn: true,
+  roughType: 'flat',
+  roughDiameter: 6.35,
+  roughStepdown: 3.18,
+  roughStepover: 2.54,
+  roughAllowance: 0.5,
+  roughRpm: 18000,
+  roughFeed: 5000,
+  roughPlunge: 1670,
+  roughFlutes: 2,
+  safeZ: 5,
+  zZero: 'top',
   lithoMin: 0.8,
   lithoMax: 3.0,
   lithoBorder: 3,

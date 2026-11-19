@@ -8,7 +8,8 @@ import { lithophaneGrid, lithoMesh, lithoRange } from '../core/litho';
 import { simulateCut, CutResult } from '../core/cutter';
 import { meshTo3mf, heightmapPng } from '../core/files';
 import type { ReliefParams } from '../core/params';
-import type { ComputeRequest, ComputeResponse } from './protocol';
+import type { ComputeRequest, ComputeResponse, PreviewPaths } from './protocol';
+import { finishingPaths, roughingPaths, writeGcode, previewSegments, Toolpath } from '../core/cam';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -16,7 +17,7 @@ let photo: { raw: RawInputs; models: boolean; ver: number } | null = null;
 let lamp: { raw: RawInputs; panels: number; ver: number } | null = null;
 let ver = 0;
 let prep: Prepared | null = null;
-let last: { key: string; mach: MachGrid; cut?: CutResult } | null = null;
+let last: { key: string; mach: MachGrid; cut?: CutResult; rough?: Toolpath | null; finish?: Toolpath } | null = null;
 
 const post = (m: ComputeResponse, transfer: Transferable[] = []) => self.postMessage(m, transfer);
 
@@ -63,6 +64,21 @@ function cutFor(p: ReliefParams): CutResult {
   return last!.cut;
 }
 
+/** roughing (null when off) and finishing toolpaths for the current relief, cached with it */
+function toolpaths(p: ReliefParams): { rough: Toolpath | null; finish: Toolpath; mach: MachGrid } {
+  const { mach } = machFor(p);
+  const c = last!;
+  if (c.finish === undefined) {
+    const tool = { type: p.toolType, diameter: p.toolDiameter, angle: p.toolAngle };
+    c.finish = { name: 'finishing', tool, rpm: p.finRpm, feed: p.finFeed, plunge: p.finPlunge, paths: finishingPaths(mach, { tool, stepover: Math.max(0.01, p.finStepover), dir: p.finDir }) };
+    if (p.roughOn) {
+      const rt = { type: p.roughType, diameter: p.roughDiameter, angle: 0 };
+      c.rough = { name: 'roughing', tool: rt, rpm: p.roughRpm, feed: p.roughFeed, plunge: p.roughPlunge, paths: roughingPaths(mach, { tool: rt, stepdown: p.roughStepdown, stepover: Math.max(0.05, p.roughStepover), allowance: p.roughAllowance, stockTop: mach.zMax }) };
+    } else c.rough = null;
+  }
+  return { rough: c.rough ?? null, finish: c.finish, mach };
+}
+
 function partMesh(p: ReliefParams, mach: MachGrid): Mesh {
   if (p.mode === 'lithophane') return lithoMesh(mach, p).mesh;
   return heightfieldMesh(mach);
@@ -106,7 +122,21 @@ self.onmessage = async (ev: MessageEvent<ComputeRequest>) => {
         mesh = { ...shown, upright: r.upright, axis: isLamp(p) };
         transfer.push(mesh.pos.buffer, mesh.idx.buffer, mesh.h.buffer);
       }
-      post({ type: 'relief', id: req.id, z, nx: mach.nx, ny: mach.ny, stats, left, mesh }, transfer);
+      let paths: PreviewPaths | undefined;
+      if (p.mode === 'relief' && req.toolpaths) {
+        const tp = toolpaths(p);
+        const g = { units: 'mm' as const, safeZ: p.safeZ, zZero: p.zZero, partTop: mach.zMax };
+        const safe = mach.zMax + p.safeZ;
+        paths = {
+          rough: tp.rough ? previewSegments(tp.rough.paths, safe) : null,
+          finish: previewSegments(tp.finish.paths, safe),
+          roughSec: tp.rough ? writeGcode(tp.rough, g).seconds : 0,
+          finishSec: writeGcode(tp.finish, g).seconds,
+        };
+        transfer.push(paths.finish.buffer);
+        if (paths.rough) transfer.push(paths.rough.buffer);
+      }
+      post({ type: 'relief', id: req.id, z, nx: mach.nx, ny: mach.ny, stats, left, mesh, paths }, transfer);
       return;
     }
     if (req.type === 'export') {
@@ -121,6 +151,25 @@ self.onmessage = async (ev: MessageEvent<ComputeRequest>) => {
         return;
       }
       const { mach } = machFor(p);
+      if (req.kind === 'gcodeRough' || req.kind === 'gcodeFinish') {
+        const tp = toolpaths(p);
+        const op = req.kind === 'gcodeRough' ? tp.rough : tp.finish;
+        if (!op) throw new Error('Roughing is switched off.');
+        if (!op.paths.some((q) => q.length >= 3)) throw new Error('Nothing to cut: the roughing tool would only cut air at this size.');
+        const r = writeGcode(op, {
+          units: req.units ?? 'mm',
+          safeZ: p.safeZ,
+          zZero: p.zZero,
+          partTop: mach.zMax,
+          notes: [
+            `Part ${mach.widthMm.toFixed(2)} x ${mach.heightMm.toFixed(2)} mm, ${mach.zMax.toFixed(2)} mm tall (base ${p.baseThickness.toFixed(2)} mm)`,
+            'Check speeds, feeds and the toolpath before running. Air-cut first if unsure.',
+          ],
+        });
+        const h = Math.floor(r.seconds / 3600), mi = Math.round((r.seconds % 3600) / 60);
+        done(new TextEncoder().encode(r.text), `${r.lines.toLocaleString()} lines, about ${h ? `${h} h ` : ''}${mi} min`);
+        return;
+      }
       if (req.kind === 'png') {
         const bytes = await heightmapPng(mach);
         done(bytes, `${mach.nx} × ${mach.ny} px, 16-bit; black = ${mach.zMin.toFixed(2)} mm, white = ${mach.zMax.toFixed(2)} mm (Z range ${(mach.zMax - mach.zMin).toFixed(2)} mm), ${(1 / mach.dx).toFixed(2)} px/mm`);

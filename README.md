@@ -2,7 +2,7 @@
 
 Turn a **photograph** into a machinable **bas-relief** and export it as a **STEP B-spline surface** (or closed solid) that Fusion 360 CAM can toolpath directly, plus **STL** for 3D printing.
 
-Everything runs in the browser (WebGPU, with a WASM fallback). Photos never leave the machine. After the first load the app works offline. G-code is out of scope; tooling, stock and toolpaths stay in Fusion.
+Everything runs in the browser (WebGPU, with a WASM fallback). Photos never leave the machine. After the first load the app works offline. For a 3-axis router it can also write simple raster G-code directly (roughing + finishing); for anything more involved, use the STEP in Fusion.
 
 ```
 photo ─► subject mask ─► depth (Depth Anything V2 Small) ─► relief compression ─► edge falloff
@@ -21,6 +21,18 @@ Every slider has a box next to it for typing an exact value (lengths in the curr
    - **STEP solid**: B-spline top, 4 planar walls and a planar bottom, sewn into one closed body (needs base thickness > 0).
    - **STL**: watertight mesh straight from the grid.
    - **Height map**: 16-bit greyscale PNG (black = lowest, white = highest, one pixel per grid point) for Vectric Aspire, Carveco or laser software. The export info gives the Z range to enter there.
+
+### G-code for a 3-axis router
+
+The **G-code** section (CNC relief mode) writes one file per tool, in plain G-code that GRBL, Mach3/4, LinuxCNC and most hobby controllers run (G20/G21 follows the inch/mm setting; no tool changes or dwells).
+
+- **Roughing** (optional): Z-level raster with its own tool (flat or ball end mill, Ø, flutes). It takes the material down level by level (**Stepdown**), lines **Rough stepover** apart, and stops **Leave for finish** above the surface. It only cuts where material is left, plunging at the plunge rate and retracting between cuts.
+- **Finishing**: zig-zag raster with the **Finishing tool** from the Relief section (ball, tapered ball, V-bit or flat), along X, Y or both (cross-hatch). The tool rides on the surface without gouging, using the same tool shape as the "As cut" view. The info line shows the ridge height the **Finish stepover** leaves and the recommended stepover (10 % of the ball / tip Ø).
+- **Speeds and feeds**: pick the **Material** and press **Use recommended**. That fills spindle speed, feed, plunge, stepdown and stepovers from common chip-load charts for a router (18 000 rpm, feeds capped at 5 m/min). These are conservative starting points; adjust them for your machine.
+- **Zero**: X0 Y0 is the front-left corner of the part. Z0 is the top of the part (the stock must be exactly base + relief thick) or the spoilboard. Re-zero Z after changing tools.
+- **Toolpaths** in the 3D view draws them (roughing orange, finishing blue) and shows estimated run times.
+
+Air-cut a new file above the stock first.
 
 ### What the cutter will leave
 
@@ -108,7 +120,8 @@ The core pipeline (`src/core/`) is pure TypeScript with no DOM, so it runs uncha
 | `src/core/step.ts` | STEP AP214 writer (surface body or closed solid) |
 | `src/core/mesh.ts` | Closed meshes: heightfield, outline-cut shapes, lamp shade, stand; binary STL |
 | `src/core/litho.ts` | Lithophane thickness mapping, outlines (rounded, oval, heart, hanging hole) |
-| `src/core/cutter.ts` | Finishing-tool simulation (ball, tapered ball, V-bit) |
+| `src/core/cutter.ts` | Tool simulation (ball, tapered ball, V-bit, flat) |
+| `src/core/cam.ts` | Roughing / finishing toolpaths, G-code writer, speeds and feeds |
 | `src/core/files.ts` | 3MF (zip) and 16-bit PNG height map writers |
 | `src/models/` | transformers.js model stage, BiRefNet WebGPU graph patch |
 | `src/workers/` | Model worker (WebGPU/WASM) and compute worker (relief, fit, export) |
