@@ -1,7 +1,7 @@
 import { Grid, mapGrid, normalizeRobust } from './grid';
 import { toMachiningGrid, MachGrid } from './resample';
 import { minLithoRadius, type ReliefParams } from './params';
-import { Mesh, cylinderMap, heightfieldMesh, maskedMesh, lampMesh } from './mesh';
+import { Mesh, cylinderMap, heightfieldMesh, maskedMesh, lampMesh, fitterMesh, mergeMeshes, upsideDown } from './mesh';
 
 /**
  * Lithophane: a thin plate whose thickness follows the photo's darkness, so it shows the picture
@@ -35,7 +35,8 @@ export function lithophaneGrid(luminance: Grid, p: ReliefParams, panels = 0): Ma
   const Y = (j: number) => (j === m.ny - 1 ? m.heightMm : j * m.dy);
   if (lamp) {
     // solid bands top and bottom, dividers between the pictures (the seam is one of them)
-    const band = Math.max(p.lithoBorder, p.lampLip > 0 ? 2.5 : 0);
+    // the band must hold the lip or the fitter's spokes
+    const band = Math.max(p.lithoBorder, p.lampFitter === 'lip' ? 2.5 : p.lampFitter === 'ring' ? 4 : 0);
     const n = Math.max(1, panels);
     const pw = m.widthMm / n;
     for (let j = 0; j < m.ny; j++)
@@ -145,7 +146,15 @@ export function hasOutline(p: ReliefParams): boolean {
  * ones and lamp shades stand upright (bottom edge at Z = 0) with the picture facing outward.
  */
 export function lithoMesh(m: MachGrid, p: ReliefParams): { mesh: Mesh; upright: boolean } {
-  if (p.lithoShape === 'lamp') return { mesh: lampMesh(m, p.lampLip), upright: true };
+  if (p.lithoShape === 'lamp') {
+    let mesh = lampMesh(m, p.lampFitter === 'lip' ? p.lampLip : 0);
+    if (p.lampFitter === 'ring') {
+      // the fitter is printed on the bed; a top fitter means printing the shade upside down
+      if (p.lampFitterEnd === 'top') mesh = upsideDown(mesh, m.heightMm);
+      mesh = mergeMeshes(mesh, fitterMesh(m.widthMm / (2 * Math.PI), p.lampHole));
+    }
+    return { mesh, upright: true };
+  }
   if (p.lithoShape === 'curved') {
     const map = cylinderMap(m.widthMm, Math.max(p.lithoRadius, minLithoRadius(m.widthMm)));
     return { mesh: p.lithoHole > 0 ? maskedMesh(m, lithoOutline(p, m.widthMm, m.heightMm).full, map) : heightfieldMesh(m, map), upright: true };

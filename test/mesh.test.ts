@@ -62,7 +62,7 @@ describe('lamp shade', () => {
   const strip: Grid = { w: 600, h: 200, data: Float32Array.from({ length: 600 * 200 }, (_, i) => ((i % 600) % 100) / 100) };
   for (const lip of [0, 8]) {
     it(`closed tube, picture outside${lip ? ', with lip' : ''}`, () => {
-      const p: ReliefParams = { ...base, lithoShape: 'lamp', lampDiameter: 80, lampLip: lip };
+      const p: ReliefParams = { ...base, lithoShape: 'lamp', lampDiameter: 80, lampFitter: lip ? 'lip' : 'none', lampLip: lip };
       const g = lithophaneGrid(strip, p, 6);
       expect(g.widthMm).toBeCloseTo(Math.PI * 80, 3);
       const { mesh, upright } = lithoMesh(g, p);
@@ -74,6 +74,30 @@ describe('lamp shade', () => {
       expect(v).toBeLessThan(shell + (lip ? Math.PI * (40 ** 2 - 32 ** 2) * 2 : 0) + 1);
       // dividers are full thickness
       expect(g.z[Math.round(g.ny / 2) * g.nx]).toBeCloseTo(g.zMax, 3);
+    });
+  }
+});
+
+describe('lamp fitter', () => {
+  const strip: Grid = { w: 600, h: 200, data: Float32Array.from({ length: 600 * 200 }, (_, i) => ((i % 600) % 100) / 100) };
+  for (const end of ['top', 'bottom'] as const) {
+    it(`ring fitter (${end}): every shell closed, hub on the bed`, () => {
+      const p: ReliefParams = { ...base, lithoShape: 'lamp', lampDiameter: 80, lampFitter: 'ring', lampHole: 11.1, lampFitterEnd: end };
+      const g = lithophaneGrid(strip, p, 6);
+      const { mesh } = lithoMesh(g, p);
+      expect(openEdges(mesh)).toBe(0);
+      let zMin = Infinity, zMax = -Infinity, hubMin = Infinity;
+      for (let k = 0; k < mesh.pos.length; k += 3) {
+        zMin = Math.min(zMin, mesh.pos[k + 2]);
+        zMax = Math.max(zMax, mesh.pos[k + 2]);
+        if (Math.hypot(mesh.pos[k], mesh.pos[k + 1]) < 6) hubMin = Math.min(hubMin, mesh.pos[k + 2]);
+      }
+      expect(zMin).toBeCloseTo(0, 3);
+      expect(zMax).toBeCloseTo(g.heightMm, 3);
+      expect(hubMin).toBeCloseTo(0, 3); // washer hole rim on the bed
+      expect(meshVolume(mesh)).toBeGreaterThan(0);
+      // the band under the spokes is solid
+      expect(g.z[2 * g.nx + 10]).toBeCloseTo(g.zMax, 3);
     });
   }
 });

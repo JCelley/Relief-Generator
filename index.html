@@ -111,7 +111,7 @@
               <li><b>Light:</b> a white LED (about 300–600 lumens) a few centimetres behind it.</li>
               <li><b>Test first:</b> set the width to about 2" and print a small piece to check your filament.</li>
               <li><b>Too dark?</b> Lower max thickness or raise Brightness. <b>Washed-out highlights?</b> Raise min thickness.</li>
-              <li><b>Lamp shade:</b> print standing on its bottom edge, no supports, 100 % infill. Set the lamp diameter so it slips over your LED puck light (or use the bottom lip to rest on it). Spin it slowly to see the pictures animate.</li>
+              <li><b>Lamp shade:</b> print standing on its bottom edge, no supports, 100 % infill. Set the lamp diameter so it slips over your LED puck light (or use the bottom lip to rest on it). With a lamp fitter, use an LED bulb only: PLA softens at about 60 °C.</li>
               <li><b>Shapes with a hanging hole:</b> print flat on the bed (picture side up) or upright with a brim.</li>
             </ul>
           </details>
@@ -168,7 +168,11 @@
                   <option value="reach">Missed areas</option>
                 </select>
               </label>
-              <button id="spin" class="small" title="Turn the part slowly">Spin</button>
+              <button id="spin" class="small" title="Turn the part (a lamp shade turns about its own axis)">Spin</button>
+              <label title="Turns per minute">rpm <input type="number" id="rpm" value="10" min="1" max="300" step="1" class="rpm" /></label>
+              <label id="strobeCtl" title="Simulates a strobe light that flashes each time the next picture faces you, so the pictures play like a flip book. A real lamp needs a strobe (or a zoetrope with slits) synced to its speed to look like this; under steady light the pictures just slide past.">
+                <input type="checkbox" id="strobe" /> Animate (strobe) <span id="fps"></span>
+              </label>
               <button id="resetView" class="small">Reset view</button>
             </div>
           </div>

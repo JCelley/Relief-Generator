@@ -1,7 +1,21 @@
 import type { ReliefParams } from '../core/params';
 
 export type Field =
-  | { key: keyof ReliefParams; label: string; kind: 'range'; min: number; max: number; step: number; unit?: string; length?: boolean; advanced?: boolean; litho?: boolean; help?: string }
+  | {
+      key: keyof ReliefParams;
+      label: string;
+      kind: 'range';
+      min: number;
+      max: number;
+      step: number;
+      unit?: string;
+      length?: boolean;
+      advanced?: boolean;
+      litho?: boolean;
+      help?: string;
+      /** common values offered in the number box's drop-down (mm for lengths) */
+      presets?: [number, string][];
+    }
   | { key: keyof ReliefParams; label: string; kind: 'select'; options: [string, string][]; advanced?: boolean; litho?: boolean; help?: string }
   | { key: keyof ReliefParams; label: string; kind: 'check'; advanced?: boolean; litho?: boolean; help?: string };
 
@@ -34,7 +48,47 @@ export const FIELDS: Field[] = [
   { key: 'lithoGamma', label: 'Midtone darkness', kind: 'range', min: 0.3, max: 3, step: 0.05, litho: true, help: 'Above 1 makes midtones thicker (darker when lit); below 1 makes them lighter.' },
   { key: 'lithoBorder', label: 'Frame', kind: 'range', min: 0, max: 15, step: 0.5, unit: 'mm', length: true, litho: true, help: 'Solid border at full thickness around the picture (for a lamp shade: the bands at top and bottom). Stiffens the part. 0 = none.' },
   { key: 'lampDivider', label: 'Divider', kind: 'range', min: 0, max: 10, step: 0.5, unit: 'mm', length: true, litho: true, help: 'Solid strip between neighbouring pictures on the lamp shade. 0 = pictures run straight into each other.' },
-  { key: 'lampLip', label: 'Bottom lip', kind: 'range', min: 0, max: 30, step: 0.5, unit: 'mm', length: true, litho: true, help: 'Inward ledge at the bottom of the lamp shade (2 mm thick) so it can rest on a puck light. 0 = open bottom. The opening is shown in the info box.' },
+  {
+    key: 'lampFitter',
+    label: 'Lamp hardware',
+    kind: 'select',
+    options: [
+      ['none', 'None (open both ends)'],
+      ['lip', 'Lip for a puck light'],
+      ['ring', 'Ring fitter (harp / socket)'],
+    ],
+    litho: true,
+    help: 'None: set it over a puck light or LED candle. Lip: a ledge at the bottom that rests on a puck light. Ring fitter: a hub with a centre hole on three spokes, for a lamp harp (spider washer) or an E12/E14 / E26/E27 socket ring.',
+  },
+  { key: 'lampLip', label: 'Lip width', kind: 'range', min: 2, max: 30, step: 0.5, unit: 'mm', length: true, litho: true, help: 'How far the 2 mm thick ledge reaches in. The opening left is shown in the info box; make it a little smaller than your puck light.' },
+  {
+    key: 'lampHole',
+    label: 'Fitter hole Ø',
+    kind: 'range',
+    min: 6,
+    max: 60,
+    step: 0.1,
+    unit: 'mm',
+    length: true,
+    litho: true,
+    help: 'Centre hole of the fitter. Harp spider washer about 7/16" (11 mm); E12/E14 shade ring about 29 mm; E26/E27 shade ring about 40 mm. Measure your socket or harp stud and add a little clearance.',
+    presets: [
+      [11.1, 'harp / spider washer 7/16"'],
+      [29, 'E12 / E14 socket ring'],
+      [40, 'E26 / E27 socket ring'],
+    ],
+  },
+  {
+    key: 'lampFitterEnd',
+    label: 'Fitter at',
+    kind: 'select',
+    options: [
+      ['top', 'Top (harp, pendant)'],
+      ['bottom', 'Bottom (sits on a table socket)'],
+    ],
+    litho: true,
+    help: 'Which end the fitter is on when in use. It is always printed on the bed, so a top fitter means the shade prints upside down (the pictures are turned to suit).',
+  },
   { key: 'lithoHole', label: 'Hanging hole', kind: 'range', min: 0, max: 10, step: 0.5, unit: 'mm', length: true, litho: true, help: 'Hole near the top centre for a string or hook, with a solid ring around it. 0 = none.' },
   { key: 'lithoGrid', label: 'Mesh resolution', kind: 'range', min: 0.1, max: 1, step: 0.05, unit: 'mm', length: true, litho: true, advanced: true, help: 'Point spacing of the STL. About half the nozzle diameter (0.2 mm for a 0.4 mm nozzle). Smaller = bigger file.' },
   { key: 'reliefHeight', label: 'Relief height', kind: 'range', min: 0.5, max: 40, step: 0.1, unit: 'mm', length: true, help: 'Total Z range of the carving above the base.' },
@@ -50,8 +104,8 @@ export const FIELDS: Field[] = [
     ],
     help: 'The tool for the finishing pass. Used to show what will actually be cut (Show: As cut / Missed areas in the 3D view) and to set the grid spacing. The exported surface is the design itself; Fusion does the cutting.',
   },
-  { key: 'toolDiameter', label: 'Tool Ø', kind: 'range', min: 0, max: 12.7, step: 0.0125, unit: 'mm', length: true, help: 'Ball end mill: ball diameter. Tapered ball: tip (ball) diameter. V-bit / engraver: flat tip diameter, 0 for a sharp point. Default 1/16".' },
-  { key: 'toolAngle', label: 'Included angle', kind: 'range', min: 5, max: 150, step: 0.5, help: 'Full included angle of the cutter (twice the angle per side). Tapered ball nose: typically 6–20°. V-bit: 30°, 60° or 90°.' },
+  { key: 'toolDiameter', label: 'Tool Ø', kind: 'range', min: 0, max: 12.7, step: 0.0125, unit: 'mm', length: true, presets: [[0.3969, '1/64"'], [0.79375, '1/32"'], [1.5875, '1/16"'], [3.175, '1/8"'], [4.7625, '3/16"'], [6.35, '1/4"'], [9.525, '3/8"'], [12.7, '1/2"'], [0.5, '0.5 mm'], [1, '1 mm'], [2, '2 mm'], [3, '3 mm'], [6, '6 mm']], help: 'Ball end mill: ball diameter. Tapered ball: tip (ball) diameter. V-bit / engraver: flat tip diameter, 0 for a sharp point. Default 1/16".' },
+  { key: 'toolAngle', label: 'Included angle', kind: 'range', min: 5, max: 150, step: 0.5, unit: '°', presets: [[6, ''], [10, ''], [15, ''], [20, ''], [30, ''], [60, ''], [90, ''], [120, '']], help: 'Full included angle of the cutter (twice the angle per side). Tapered ball nose: typically 6–20°. V-bit: 30°, 60° or 90°.' },
   {
     key: 'method',
     label: 'Compression',

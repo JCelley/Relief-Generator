@@ -62,6 +62,7 @@ export class ReliefPreview {
     this.resetView();
     const tick = () => {
       this.frame = requestAnimationFrame(tick);
+      if (this.spinPart()) this.render();
       if (this.controls.update()) this.render();
     };
     tick();
@@ -163,7 +164,8 @@ export class ReliefPreview {
    * Lithophane preview from its printable mesh (see core/mesh). Flat ones lie picture-up; upright
    * ones (curved, lamp shade) stand on Z = 0 and are turned so the picture faces the camera.
    */
-  setLithoMesh(pos: Float32Array, idx: Uint32Array, h: Float32Array, topTris: number, upright: boolean) {
+  setLithoMesh(pos: Float32Array, idx: Uint32Array, h: Float32Array, topTris: number, upright: boolean, axis = false) {
+    this.lampAxis = axis;
     const p = new Float32Array(pos.length);
     const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     for (let k = 0; k < pos.length; k += 3) {
@@ -175,7 +177,8 @@ export class ReliefPreview {
       }
     }
     // centre in x / y; flat parts keep the back at z = 0 like the relief view
-    const cx = (lo[0] + hi[0]) / 2, cy = (lo[1] + hi[1]) / 2, cz = upright ? (lo[2] + hi[2]) / 2 : 0;
+    // a lamp shade stays centred on its axis so it spins true
+    const cx = axis ? 0 : (lo[0] + hi[0]) / 2, cy = (lo[1] + hi[1]) / 2, cz = axis ? 0 : upright ? (lo[2] + hi[2]) / 2 : 0;
     for (let k = 0; k < p.length; k += 3) {
       p[k] -= cx; p[k + 1] -= cy; p[k + 2] -= cz;
     }
@@ -215,9 +218,39 @@ export class ReliefPreview {
   }
 
   /** slowly turns the view around the part (lamp shades) */
-  setSpin(on: boolean) {
-    this.controls.autoRotate = on;
-    this.controls.autoRotateSpeed = 6;
+  /**
+   * Spin: a lamp shade turns about its own axis at `rpm` under a fixed light. With `frames` > 0 a
+   * strobe is simulated: it flashes each time the next picture faces you, so you see only those
+   * moments and the pictures play like a flip book (frames × rpm / 60 pictures per second).
+   * Anything else is orbited by the camera instead.
+   */
+  setSpin(on: boolean, rpm = 10, frames = 0) {
+    this.spin = { on, rpm, frames, t0: performance.now() };
+    const own = on && this.lampAxis;
+    this.controls.autoRotate = on && !own;
+    this.controls.autoRotateSpeed = Math.min(60, rpm);
+    if (!on) this.setPartAngle(0);
+    this.requestRender();
+  }
+
+  private spin = { on: false, rpm: 10, frames: 0, t0: 0 };
+  private lampAxis = false;
+
+  private setPartAngle(a: number) {
+    if (this.lithoTop) this.lithoTop.rotation.y = a;
+    if (this.lithoRest) this.lithoRest.rotation.y = a;
+  }
+
+  /** advances a spinning lamp shade; true when it moved */
+  private spinPart(): boolean {
+    if (!this.spin.on || !this.lampAxis || !this.lithoTop?.visible) return false;
+    const turns = ((performance.now() - this.spin.t0) / 60000) * this.spin.rpm;
+    const n = this.spin.frames;
+    // picture k is centred at (k + ½)/n of a turn; turning by −that brings it to the front
+    const a = n > 0 ? -((Math.floor(turns * n) + 0.5) / n) * 2 * Math.PI : -turns * 2 * Math.PI;
+    if (this.lithoTop.rotation.y === a) return false;
+    this.setPartAngle(a);
+    return true;
   }
 
   private updateBacklitColors() {

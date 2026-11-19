@@ -366,3 +366,77 @@ export function decimateGrid(g: MachGrid, maxPoints: number): MachGrid {
   for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) z[j * nx + i] = g.z[rows[j] * g.nx + cols[i]];
   return { ...g, nx, ny, dx: g.dx * s, dy: g.dy * s, z };
 }
+
+/** Appends the triangles of `b` after those of `a` (a's picture surface stays first). */
+export function mergeMeshes(a: Mesh, b: Mesh): Mesh {
+  const nv = a.h.length;
+  const pos = new Float32Array(a.pos.length + b.pos.length);
+  pos.set(a.pos);
+  pos.set(b.pos, a.pos.length);
+  const h = new Float32Array(nv + b.h.length);
+  h.set(a.h);
+  h.set(b.h, nv);
+  const idx = new Uint32Array(a.idx.length + b.idx.length);
+  idx.set(a.idx);
+  for (let k = 0; k < b.idx.length; k++) idx[a.idx.length + k] = b.idx[k] + nv;
+  return { pos, h, idx, topTris: a.topTris };
+}
+
+/** Closed solid of revolution about Z from a closed (r, z) profile. */
+function revolve(prof: [number, number][], segs: number): Mesh {
+  const m = new MB();
+  const np = prof.length;
+  for (let s = 0; s < segs; s++) {
+    const th = (2 * Math.PI * s) / segs;
+    for (const [r, zz] of prof) m.vert([r * Math.sin(th), -r * Math.cos(th), zz]);
+  }
+  const V = (s: number, k: number) => (s % segs) * np + (k % np);
+  for (let s = 0; s < segs; s++) for (let k = 0; k < np; k++) m.quad(V(s, k), V(s + 1, k), V(s + 1, k + 1), V(s, k + 1));
+  const mesh = m.done(0);
+  if (meshVolume(mesh) < 0) flip(mesh);
+  return mesh;
+}
+
+/** Closed box from 8 corners: 0-3 bottom loop, 4-7 the same loop on top. */
+function box(c: [number, number, number][]): Mesh {
+  const m = new MB();
+  for (const p of c) m.vert(p);
+  m.quad(0, 3, 2, 1);
+  m.quad(4, 5, 6, 7);
+  for (let k = 0; k < 4; k++) m.quad(k, (k + 1) % 4, 4 + ((k + 1) % 4), 4 + k);
+  const mesh = m.done(0);
+  if (meshVolume(mesh) < 0) flip(mesh);
+  return mesh;
+}
+
+/**
+ * Ring fitter on the bed (Z = 0 … T) inside a lamp shade of inside radius R: a hub with a centre
+ * hole (harp spider washer, or the shade ring of an E14 / E27 socket) held by three spokes that
+ * run into the shade's solid band. Separate overlapping shells; slicers merge them.
+ */
+export function fitterMesh(R: number, hole: number, T = 3): Mesh {
+  const rh = Math.max(1, hole / 2);
+  const ro = Math.min(R - 2, rh + Math.max(6, hole * 0.2));
+  let m = revolve([[rh, 0], [ro, 0], [ro, T], [rh, T]], 96);
+  const w = 6;
+  for (let k = 0; k < 3; k++) {
+    // spokes on picture boundaries 0°, 120°, 240° (seen from above)
+    const a = (2 * Math.PI * k) / 3;
+    const u = [Math.sin(a), -Math.cos(a)], v = [Math.cos(a), Math.sin(a)];
+    const r0 = ro - 1, r1 = R + 0.4;
+    const pt = (r: number, s: number, zz: number): [number, number, number] => [u[0] * r + v[0] * s, u[1] * r + v[1] * s, zz];
+    m = mergeMeshes(m, box([pt(r0, -w / 2, 0), pt(r1, -w / 2, 0), pt(r1, w / 2, 0), pt(r0, w / 2, 0), pt(r0, -w / 2, T), pt(r1, -w / 2, T), pt(r1, w / 2, T), pt(r0, w / 2, T)]));
+  }
+  return m;
+}
+
+/** Turns a standing part upside down (180° about X), keeping it on the bed between Z = 0 and H. */
+export function upsideDown(m: Mesh, H: number): Mesh {
+  const pos = new Float32Array(m.pos.length);
+  for (let k = 0; k < pos.length; k += 3) {
+    pos[k] = m.pos[k];
+    pos[k + 1] = -m.pos[k + 1];
+    pos[k + 2] = H - m.pos[k + 2];
+  }
+  return { ...m, pos };
+}

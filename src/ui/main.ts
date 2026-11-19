@@ -88,7 +88,36 @@ function exportInfo(msg: string, err = false) {
 // ---- parameter UI --------------------------------------------------------------------------------
 const fmtLen = (mm: number) => (units === 'in' ? `${(mm / MM_PER_IN).toFixed(mm < 2.54 ? 4 : 3)} in` : `${mm.toFixed(mm < 1 ? 3 : 2)} mm`);
 
-const inputs = new Map<keyof ReliefParams, { f: Field; input: HTMLInputElement | HTMLSelectElement; out?: HTMLOutputElement }>();
+const inputs = new Map<keyof ReliefParams, { f: Field; input: HTMLInputElement | HTMLSelectElement; num?: HTMLInputElement; unit?: HTMLElement }>();
+
+/** a value in mm (or the raw value) as shown in a number box, in the current units */
+function toDisplay(f: Field, v: number): string {
+  if (f.kind === 'range' && f.length) {
+    const x = units === 'in' ? v / MM_PER_IN : v;
+    if (units === 'in') {
+      // exact 1/64" fractions (tool sizes) in full, anything else to 4 places
+      const f64 = x * 64;
+      return String(Math.abs(f64 - Math.round(f64)) < 1e-4 ? Math.round(f64) / 64 : Number(x.toFixed(Math.abs(x) < 0.01 ? 5 : 4)));
+    }
+    return String(Number(x.toFixed(3)));
+  }
+  return String(Number(v.toFixed(4)));
+}
+const fromDisplay = (f: Field, x: number) => (f.kind === 'range' && f.length && units === 'in' ? x * MM_PER_IN : x);
+
+/** drop-down suggestions for a number box (common tool sizes, fitter holes, angles) */
+function fillPresets(f: Field) {
+  if (f.kind !== 'range' || !f.presets) return;
+  const dl = document.getElementById(`dl_${f.key}`) as HTMLDataListElement;
+  dl.replaceChildren(
+    ...f.presets.map(([v, label]) => {
+      const o = document.createElement('option');
+      o.value = toDisplay(f, v);
+      if (label) o.label = label;
+      return o;
+    }),
+  );
+}
 
 function buildFields() {
   for (const f of FIELDS) {
@@ -101,7 +130,8 @@ function buildFields() {
     label.htmlFor = `p_${f.key}`;
     row.appendChild(label);
     let input: HTMLInputElement | HTMLSelectElement;
-    let out: HTMLOutputElement | undefined;
+    let num: HTMLInputElement | undefined;
+    let unit: HTMLElement | undefined;
     if (f.kind === 'select') {
       input = document.createElement('select');
       for (const [v, t] of f.options) {
@@ -118,12 +148,47 @@ function buildFields() {
         input.min = String(f.min);
         input.max = String(f.max);
         input.step = String(f.step);
-        out = document.createElement('output');
+        // exact value: type it in (lengths in the current units)
+        num = document.createElement('input');
+        num.type = 'number';
+        num.step = 'any';
+        num.className = 'num';
+        num.id = `n_${f.key}`;
+        num.setAttribute('aria-label', `${f.label} value`);
+        if (f.presets) {
+          const dl = document.createElement('datalist');
+          dl.id = `dl_${f.key}`;
+          row.appendChild(dl);
+          num.setAttribute('list', dl.id);
+        }
+        unit = document.createElement('em');
       }
     }
     input.id = `p_${f.key}`;
     row.appendChild(input);
-    if (out) row.appendChild(out);
+    if (num && unit) {
+      const wrap = document.createElement('span');
+      wrap.className = 'num-wrap';
+      wrap.append(num, unit);
+      row.appendChild(wrap);
+      const n = num;
+      n.addEventListener('change', () => {
+        if (f.kind !== 'range') return;
+        const x = Number(n.value);
+        if (n.value.trim() === '' || !Number.isFinite(x)) {
+          syncOutputs();
+          return;
+        }
+        const v = Math.min(f.max, Math.max(f.min, fromDisplay(f, x)));
+        (params as unknown as Record<string, number>)[f.key] = v;
+        input.value = String(v);
+        syncOutputs(true);
+        onParamsChanged();
+      });
+      n.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') n.blur();
+      });
+    }
     host.appendChild(row);
     const handler = () => {
       const p = params as unknown as Record<string, unknown>;
@@ -137,7 +202,7 @@ function buildFields() {
       onParamsChanged();
     };
     input.addEventListener('input', handler);
-    inputs.set(f.key, { f, input, out });
+    inputs.set(f.key, { f, input, num, unit });
   }
 }
 
@@ -149,18 +214,19 @@ function syncInputs() {
   }
   ($('width') as HTMLInputElement).value = units === 'in' ? (params.widthMm / MM_PER_IN).toFixed(3) : params.widthMm.toFixed(1);
   ($('units') as HTMLSelectElement).value = units;
-  syncOutputs();
+  for (const { f } of inputs.values()) fillPresets(f);
+  syncOutputs(true);
 }
 
-function syncOutputs() {
+/** force: also rewrite the number box that has focus (after a typed value was applied) */
+function syncOutputs(force = false) {
   const p = params as unknown as Record<string, number>;
-  for (const { f, out } of inputs.values()) {
-    if (!out || f.kind !== 'range') continue;
+  for (const { f, num, unit } of inputs.values()) {
+    if (!num || !unit || f.kind !== 'range') continue;
     const v = p[f.key];
-    if (f.key === 'gridSpacing' && v === 0) out.textContent = `auto ${fmtLen(effectiveGridSpacing(params))}`;
-    else if (f.key === 'toolAngle') out.textContent = `${v}°`;
-    else if (f.key === 'lithoBrightness') out.textContent = (v > 0 ? '+' : '') + v.toFixed(2);
-    else out.textContent = f.length ? fmtLen(v) : String(Number(v.toFixed(4)));
+    if (force || document.activeElement !== num) num.value = toDisplay(f, v);
+    unit.textContent = f.length ? units : (f.unit ?? '');
+    if (f.key === 'gridSpacing') num.title = v === 0 ? `auto: ${fmtLen(effectiveGridSpacing(params))}` : '';
   }
   // show only the controls that matter for the current mode / method / bg mode
   const litho = params.mode === 'lithophane';
@@ -180,13 +246,17 @@ function syncOutputs() {
     const sh = params.lithoShape, lamp = sh === 'lamp';
     vis('lithoRadius', sh === 'curved');
     vis('lithoCorner', sh === 'rounded');
-    for (const k of ['lampDiameter', 'lampHeight', 'lampDivider', 'lampLip'] as const) vis(k, lamp);
+    for (const k of ['lampDiameter', 'lampHeight', 'lampDivider', 'lampFitter'] as const) vis(k, lamp);
+    vis('lampLip', lamp && params.lampFitter === 'lip');
+    vis('lampHole', lamp && params.lampFitter === 'ring');
+    vis('lampFitterEnd', lamp && params.lampFitter === 'ring');
     vis('lithoHole', !lamp);
   }
   const lamp = isLamp();
   $('lampBox').hidden = !lamp;
   for (const id of ['width', 'heightOut']) ($(id).parentElement as HTMLElement).hidden = lamp;
   $('viewCtl').hidden = litho;
+  $('strobeCtl').hidden = !lamp;
   $('presetRow').hidden = litho;
   $('lithoTips').hidden = !litho;
   updateLithoWarn();
@@ -222,7 +292,10 @@ function lampInfo(s: ReliefStats): string {
   return `
 lamp inside Ø ${fmtLen(D)}, outside Ø ${fmtLen(D + 2 * s.zMax)}, ${fmtLen(s.heightMm)} tall
 ${n} picture${n === 1 ? '' : 's'}, each ${fmtLen((Math.PI * D) / Math.max(1, n))} wide` +
-    (params.lampLip > 0 ? `\nbottom opening Ø ${fmtLen(Math.max(0, D - 2 * params.lampLip))}` : '');
+    (params.lampFitter === 'lip' ? `\nbottom opening Ø ${fmtLen(Math.max(0, D - 2 * params.lampLip))}` : '') +
+    (params.lampFitter === 'ring'
+      ? `\nfitter hole Ø ${fmtLen(params.lampHole)} at the ${params.lampFitterEnd}` + (params.lampFitterEnd === 'top' ? ' (prints upside down)' : '')
+      : '');
 }
 
 function toolInfo(s: ReliefStats): string {
@@ -558,7 +631,10 @@ computeWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
     busy = false;
     lastStats = m.stats;
     let shown = m.z;
-    if (m.mesh) preview.setLithoMesh(m.mesh.pos, m.mesh.idx, m.mesh.h, m.mesh.topTris, m.mesh.upright);
+    if (m.mesh) {
+      preview.setLithoMesh(m.mesh.pos, m.mesh.idx, m.mesh.h, m.mesh.topTris, m.mesh.upright, m.mesh.axis);
+      applySpin();
+    }
     else {
       const view = viewMode();
       if (m.left && view === 'cut') {
@@ -706,11 +782,21 @@ $('view').addEventListener('change', () => {
   requestRelief();
 });
 let spinning = false;
+/** spin settings → preview; the strobe needs one flash per lamp picture */
+function applySpin() {
+  const rpm = Math.min(300, Math.max(1, Number(($('rpm') as HTMLInputElement).value) || 10));
+  const strobe = ($('strobe') as HTMLInputElement).checked && isLamp() && lampImgs.list.length > 1;
+  const n = lampImgs.list.length;
+  $('fps').textContent = strobe ? `${((rpm * n) / 60).toFixed(1)} pictures/s` : '';
+  preview.setSpin(spinning, rpm, strobe ? n : 0);
+}
 $('spin').addEventListener('click', () => {
   spinning = !spinning;
   $('spin').classList.toggle('on', spinning);
-  preview.setSpin(spinning);
+  applySpin();
 });
+for (const id of ['rpm', 'strobe']) $(id).addEventListener('change', applySpin);
+$('rpm').addEventListener('input', applySpin);
 $('cropBtn').addEventListener('click', async () => {
   if (!lastFile) return;
   const f = await cropDialog(lastFile);

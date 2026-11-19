@@ -37,6 +37,8 @@ export interface PreviewMesh {
   h: Float32Array;
   topTris: number;
   upright: boolean;
+  /** lamp shade: centred on its axis, so it can be spun about it */
+  axis: boolean;
 }
 
 export interface ReliefStats {

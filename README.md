@@ -13,6 +13,8 @@ photo ─► subject mask ─► depth (Depth Anything V2 Small) ─► relief c
 
 1. `npm install`, then `npm run dev` and open the printed URL in Chrome or Edge (WebGPU). You can also use the GitHub Pages build.
 2. Drop a photo. On the first run the models download (about 140 MB) and are cached by the browser after that. **Crop / rotate…** under the drop area turns the photo or keeps only part of it (free or fixed shapes such as square).
+Every slider has a box next to it for typing an exact value (lengths in the current units; press Enter). The tool Ø, fitter hole and angle boxes also offer common sizes in their drop-down (1/64"–1/2", metric mills, 30/60/90° V-bits).
+
 3. Pick a preset (Portrait / Pet / Object / Landscape / Illustration), set the width and relief height, and judge the result in the 3D view by moving the raking light. Use **Landscape** for scenes with no single subject (sunsets, trees, buildings): it keeps the whole picture instead of cutting out a subject. A plain border around the picture (poster matte, black bars) is trimmed off automatically so it doesn't become a raised frame.
 4. Export:
    - **STEP surface**: one smooth B-spline face (top only). Define stock in Fusion.
@@ -50,7 +52,15 @@ Set **Make** to **Lithophane (3D print)**. Instead of a carved shape, the tool m
 
 ### Lamp shade
 
-Pick **Shape → Lamp shade** and add pictures (button or drag and drop; reorder with ◀ ▶). They wrap all the way around a cylinder in that order, each one centre-cropped to an equal slice (π × diameter ÷ number of pictures). For a flip-book effect as it turns, use 6 or more frames of a scene that changes a little each time; frames from a short video work well. Settings: **Lamp diameter** (inside), **Lamp height**, **Divider** (solid strip between pictures), **Frame** (solid bands top and bottom) and **Bottom lip** (2 mm inward ledge to rest on a puck light; the info box shows the opening). **Spin** in the 3D view turns it. It is exported standing up, ready to print without supports.
+Pick **Shape → Lamp shade** and add pictures (button or drag and drop; reorder with ◀ ▶). They wrap all the way around a cylinder in that order, each one centre-cropped to an equal slice (π × diameter ÷ number of pictures). For a flip-book effect as it turns, use 6 or more frames of a scene that changes a little each time; frames from a short video work well. Settings: **Lamp diameter** (inside), **Lamp height**, **Divider** (solid strip between pictures), **Frame** (solid bands top and bottom) and **Lamp hardware**:
+
+| Hardware | For | Notes |
+|---|---|---|
+| None | LED puck light, tea light, battery candle | Set it over the light. |
+| Lip for a puck light | Puck lights | 2 mm inward ledge at the bottom; **Lip width** sets the opening (shown in the info box). |
+| Ring fitter | Lamps with a harp (spider washer, ~7/16" / 11 mm hole), E12/E14 sockets (~29 mm shade ring), E26/E27 sockets (~40 mm shade ring), pendant cord sets | A hub with a centre hole on three spokes in the solid band. **Fitter at** top (harp, pendant) or bottom (sits on a table-lamp socket). The fitter is always printed on the bed, so a top fitter prints the shade upside down (pictures turned to suit). Measure your harp stud or socket and add a little clearance. |
+
+Use an LED bulb: PLA softens at about 60 °C. **Spin** in the 3D view turns the lamp about its axis at the set **rpm**. **Animate (strobe)** simulates a strobe light that flashes each time the next picture faces you, so the pictures play like a flip book (pictures per second = rpm × pictures ÷ 60; about 10–12 looks smooth). In real life that needs a strobe synced to the turntable (or a zoetrope with slits); under steady light the pictures just slide past. It is exported standing up, ready to print without supports.
 
 The 3D view switches to a **Backlit** finish that simulates light shining through; pick Clay to see the geometry. Export is STL or **3MF** (the same mesh in a much smaller file that slicers open directly). Flat: back at Z = 0, picture side up. Curved and lamp shades: exported standing up (bottom edge at Z = 0), ready to print upright. Flat shapes also get a **Stand STL**: a block with a slot tilted 10° back, sized to the plate's max thickness plus 0.4 mm. A lithophane needs only the photo's brightness, so no models are downloaded or run in this mode.
 

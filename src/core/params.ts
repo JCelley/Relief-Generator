@@ -95,8 +95,14 @@ export interface ReliefParams {
   lampHeight: number;
   /** lamp shade: solid divider between pictures (mm), 0 = none */
   lampDivider: number;
-  /** lamp shade: inward lip at the bottom to rest on a puck light (mm), 0 = none */
+  /** lamp shade: inward lip at the bottom to rest on a puck light (mm) */
   lampLip: number;
+  /** lamp shade hardware: open, lip for a puck light, or a ring fitter (spider washer / socket ring) */
+  lampFitter: 'none' | 'lip' | 'ring';
+  /** ring fitter: centre hole (mm), e.g. 7/16" harp washer, 29 mm E14, 40 mm E27 */
+  lampHole: number;
+  /** ring fitter at the top (harp / pendant) or the bottom (sits on a table-lamp socket) */
+  lampFitterEnd: 'top' | 'bottom';
 }
 
 export type LithoShape = 'flat' | 'rounded' | 'oval' | 'heart' | 'curved' | 'lamp';
@@ -148,7 +154,10 @@ export const DEFAULT_PARAMS: ReliefParams = {
   lampDiameter: 100,
   lampHeight: 120,
   lampDivider: 1.5,
-  lampLip: 0,
+  lampLip: 8,
+  lampFitter: 'none',
+  lampHole: 40,
+  lampFitterEnd: 'top',
 };
 
 export type PresetName = 'portrait' | 'pet' | 'object' | 'landscape' | 'illustration';

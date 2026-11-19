@@ -3,7 +3,7 @@ import { prepare, computeRelief, Prepared, RawInputs } from '../core/relief';
 import { toMachiningGrid, MachGrid } from '../core/resample';
 import { fitSurface } from '../core/bspline';
 import { writeStep } from '../core/step';
-import { heightfieldMesh, meshToStl, standMesh, decimateGrid, placeOnBed, Mesh } from '../core/mesh';
+import { heightfieldMesh, meshToStl, standMesh, decimateGrid, placeOnBed, upsideDown, Mesh } from '../core/mesh';
 import { lithophaneGrid, lithoMesh, lithoRange } from '../core/litho';
 import { simulateCut, CutResult } from '../core/cutter';
 import { meshTo3mf, heightmapPng } from '../core/files';
@@ -100,7 +100,10 @@ self.onmessage = async (ev: MessageEvent<ComputeRequest>) => {
       if (p.mode === 'lithophane') {
         const small = decimateGrid(mach, 350_000);
         const r = lithoMesh(small, p);
-        mesh = { ...r.mesh, upright: r.upright };
+        // show a lamp the way up it is used (a top fitter is printed upside down)
+        const flipped = isLamp(p) && p.lampFitter === 'ring' && p.lampFitterEnd === 'top';
+        const shown = flipped ? upsideDown(r.mesh, small.heightMm) : r.mesh;
+        mesh = { ...shown, upright: r.upright, axis: isLamp(p) };
         transfer.push(mesh.pos.buffer, mesh.idx.buffer, mesh.h.buffer);
       }
       post({ type: 'relief', id: req.id, z, nx: mach.nx, ny: mach.ny, stats, left, mesh }, transfer);
