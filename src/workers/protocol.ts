@@ -21,10 +21,23 @@ export type ModelResponse =
   | { type: 'error'; id: number; device: Device; message: string };
 
 // ---- compute worker ----------------------------------------------------------------------------
+/** what the Export buttons produce */
+export type ExportKind = StepKind | 'stl' | '3mf' | 'png' | 'stand';
+
 export type ComputeRequest =
-  | { type: 'inputs'; raw: RawInputs }
-  | { type: 'params'; id: number; params: ReliefParams }
-  | { type: 'export'; id: number; params: ReliefParams; kind: StepKind | 'stl'; name: string };
+  /** photo: the analysed photo (models: false = luminance only, enough for a lithophane); lamp: all lamp pictures side by side */
+  | { type: 'inputs'; raw: RawInputs; slot: 'photo' | 'lamp'; models: boolean; panels?: number }
+  | { type: 'params'; id: number; params: ReliefParams; view: 'design' | 'cut' | 'reach' }
+  | { type: 'export'; id: number; params: ReliefParams; kind: ExportKind; name: string };
+
+/** lithophane mesh for the preview (decimated) */
+export interface PreviewMesh {
+  pos: Float32Array;
+  idx: Uint32Array;
+  h: Float32Array;
+  topTris: number;
+  upright: boolean;
+}
 
 export interface ReliefStats {
   widthMm: number;
@@ -36,11 +49,14 @@ export interface ReliefStats {
   dx: number;
   ms: number;
   iterations?: number;
+  /** cutter simulation: fraction of the surface the tool cannot reach, and the most left there */
+  missedFrac?: number;
+  maxLeft?: number;
 }
 
 export type ComputeResponse =
   | { type: 'prepared'; mask: Grid; depth: Grid }
-  | { type: 'relief'; id: number; z: Float32Array; nx: number; ny: number; stats: ReliefStats }
-  | { type: 'exported'; id: number; kind: StepKind | 'stl'; bytes: Uint8Array; info: string }
+  | { type: 'relief'; id: number; z: Float32Array; nx: number; ny: number; stats: ReliefStats; left?: Float32Array; mesh?: PreviewMesh }
+  | { type: 'exported'; id: number; kind: ExportKind; bytes: Uint8Array; info: string }
   | { type: 'progress'; id: number; message: string }
   | { type: 'error'; id: number; message: string };

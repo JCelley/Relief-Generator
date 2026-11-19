@@ -1,14 +1,15 @@
-import { DEFAULT_PARAMS, PRESETS, PresetName, ReliefParams, minLithoRadius } from '../core/params';
+import { DEFAULT_PARAMS, PRESETS, PresetName, ReliefParams, minLithoRadius, effectiveGridSpacing } from '../core/params';
 import { shadeHeightfield } from '../core/shade';
 import type { Grid } from '../core/grid';
 import type { RawInputs } from '../core/relief';
 import type { MaskModelKey, Device } from '../models/infer';
-import type { ComputeRequest, ComputeResponse, ModelRequest, ModelResponse, ReliefStats } from '../workers/protocol';
+import type { ComputeRequest, ComputeResponse, ExportKind, ModelRequest, ModelResponse, ReliefStats } from '../workers/protocol';
 import { FIELDS, Field } from './schema';
 import { maskQuality } from '../core/maskQuality';
 import { MASK_MODELS } from '../models/infer';
 import { ReliefPreview, Finish } from './preview3d';
 import { backlitBrightness } from '../core/litho';
+import { photoLuminance, LampImages, cropDialog } from './images';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const MM_PER_IN = 25.4;
@@ -34,7 +35,14 @@ const saved = loadSaved();
 let params: ReliefParams = { ...DEFAULT_PARAMS, ...PRESETS.portrait, ...(saved.params ?? {}) };
 let units: Units = saved.units ?? 'in';
 let photoName = 'relief';
-let haveInputs = false;
+/** a photo's luminance is in the compute worker (enough for a flat or curved lithophane) */
+let havePhoto = false;
+/** the depth / mask models have run on the current photo (needed for a CNC relief) */
+let photoModels = false;
+let modelsRunning = false;
+const isLamp = () => params.mode === 'lithophane' && params.lithoShape === 'lamp';
+/** inputs for the current mode are in the compute worker */
+const haveInputsFor = () => (params.mode === 'relief' ? photoModels : isLamp() ? lampImgs.list.length > 0 : havePhoto);
 function persist() {
   try {
     const s: Saved = {
@@ -120,7 +128,10 @@ function buildFields() {
     const handler = () => {
       const p = params as unknown as Record<string, unknown>;
       if (f.kind === 'check') p[f.key] = (input as HTMLInputElement).checked;
-      else if (f.kind === 'select') p[f.key] = input.value;
+      else if (f.kind === 'select') {
+        p[f.key] = input.value;
+        if (f.key === 'lithoShape' && input.value === 'lamp' && !lampImgs.list.length && lastFile) lampImgs.add([lastFile]);
+      }
       else p[f.key] = Number(input.value);
       syncOutputs();
       onParamsChanged();
@@ -146,7 +157,9 @@ function syncOutputs() {
   for (const { f, out } of inputs.values()) {
     if (!out || f.kind !== 'range') continue;
     const v = p[f.key];
-    if (f.key === 'gridSpacing' && v === 0) out.textContent = `auto ${fmtLen(params.toolDiameter / 4)}`;
+    if (f.key === 'gridSpacing' && v === 0) out.textContent = `auto ${fmtLen(effectiveGridSpacing(params))}`;
+    else if (f.key === 'toolAngle') out.textContent = `${v}°`;
+    else if (f.key === 'lithoBrightness') out.textContent = (v > 0 ? '+' : '') + v.toFixed(2);
     else out.textContent = f.length ? fmtLen(v) : String(Number(v.toFixed(4)));
   }
   // show only the controls that matter for the current mode / method / bg mode
@@ -162,7 +175,18 @@ function syncOutputs() {
     vis('gradThreshold', params.method === 'gradient');
     vis('toneDarkUp', params.toneDepth > 0);
     vis('toneScale', params.toneDepth > 0);
-  } else vis('lithoRadius', params.lithoShape === 'curved');
+    vis('toolAngle', params.toolType !== 'ball');
+  } else {
+    const sh = params.lithoShape, lamp = sh === 'lamp';
+    vis('lithoRadius', sh === 'curved');
+    vis('lithoCorner', sh === 'rounded');
+    for (const k of ['lampDiameter', 'lampHeight', 'lampDivider', 'lampLip'] as const) vis(k, lamp);
+    vis('lithoHole', !lamp);
+  }
+  const lamp = isLamp();
+  $('lampBox').hidden = !lamp;
+  for (const id of ['width', 'heightOut']) ($(id).parentElement as HTMLElement).hidden = lamp;
+  $('viewCtl').hidden = litho;
   $('presetRow').hidden = litho;
   $('lithoTips').hidden = !litho;
   updateLithoWarn();
@@ -186,7 +210,31 @@ function updateDims() {
     `Z min  ${both(s.zMin)}\nZ max  ${both(s.zMax)}\n` +
     `grid   ${s.nx} × ${s.ny} @ ${s.dx.toFixed(3)} mm` +
     (s.ms ? `   (${Math.round(s.ms)} ms)` : '') +
-    curvedInfo(s);
+    curvedInfo(s) +
+    lampInfo(s) +
+    toolInfo(s);
+}
+
+function lampInfo(s: ReliefStats): string {
+  if (!isLamp()) return '';
+  const n = lampImgs.list.length;
+  const D = params.lampDiameter;
+  return `
+lamp inside Ø ${fmtLen(D)}, outside Ø ${fmtLen(D + 2 * s.zMax)}, ${fmtLen(s.heightMm)} tall
+${n} picture${n === 1 ? '' : 's'}, each ${fmtLen((Math.PI * D) / Math.max(1, n))} wide` +
+    (params.lampLip > 0 ? `\nbottom opening Ø ${fmtLen(Math.max(0, D - 2 * params.lampLip))}` : '');
+}
+
+function toolInfo(s: ReliefStats): string {
+  if (params.mode !== 'relief' || s.missedFrac === undefined) return '';
+  const name =
+    params.toolType === 'ball'
+      ? `${fmtLen(params.toolDiameter)} ball`
+      : params.toolType === 'taperedBall'
+        ? `${fmtLen(params.toolDiameter)} tip ${params.toolAngle}° tapered ball`
+        : `${params.toolDiameter > 0 ? fmtLen(params.toolDiameter) + ' tip ' : ''}${params.toolAngle}° V-bit`;
+  return `
+tool   ${name}: can't reach ${(100 * s.missedFrac).toFixed(1)} % (up to ${fmtLen(s.maxLeft ?? 0)} left)`;
 }
 
 /** warns about thicknesses outside what prints and lights well (white PLA, 0.4 mm nozzle) */
@@ -228,7 +276,7 @@ footprint ${fmtLen(chord)} × ${fmtLen(depth)}, ${fmtLen(s.heightMm)} tall`;
 let debounce = 0;
 /** shows the Reset button when a slider no longer matches the selected preset */
 /** lithophane sliders the Reset button restores (the Shape choice is kept) */
-const LITHO_SLIDERS = ['lithoMax', 'lithoMin', 'lithoGamma', 'lithoRadius', 'lithoBorder', 'lithoGrid'] as const;
+const LITHO_SLIDERS = ['lithoMax', 'lithoMin', 'lithoGamma', 'lithoBrightness', 'lithoContrast', 'lithoRadius', 'lithoCorner', 'lithoBorder', 'lampDivider', 'lithoGrid'] as const;
 
 /** values Reset goes back to: the selected preset (relief) or the lithophane defaults */
 function resetTarget(): Partial<ReliefParams> {
@@ -258,7 +306,9 @@ function applyPreset() {
 function onParamsChanged() {
   updatePresetModified();
   persist();
-  if (!haveInputs) return;
+  if (params.mode === 'relief' && havePhoto && !photoModels && !modelsRunning && lastFile) analyze(lastFile);
+  setExportsEnabled(Boolean(lastStats) && haveInputsFor());
+  if (!haveInputsFor()) return;
   clearTimeout(debounce);
   debounce = window.setTimeout(requestRelief, 120);
 }
@@ -268,10 +318,33 @@ function requestRelief() {
     dirty = true;
     return;
   }
+  if (!haveInputsFor()) return;
   busy = true;
   dirty = false;
   showMaskWarning();
-  sendCompute({ type: 'params', id: ++reliefId, params: { ...params } });
+  if (isLamp()) sendLampInputs();
+  sendCompute({ type: 'params', id: ++reliefId, params: { ...params }, view: viewMode() });
+}
+
+const viewMode = () => ($('view') as HTMLSelectElement).value as 'design' | 'cut' | 'reach';
+
+// ---- lamp shade pictures ------------------------------------------------------------------------
+let lampSent = '';
+const lampImgs = new LampImages($('lampList'), () => {
+  $('lampCount').textContent = lampImgs.list.length ? `(${lampImgs.list.length})` : '';
+  updateDims();
+  onParamsChanged();
+});
+/** composes the strip of lamp pictures and sends it, when the pictures or the lamp size changed */
+function sendLampInputs() {
+  const key = `${lampImgs.version}|${params.lampDiameter}|${params.lampHeight}`;
+  if (key === lampSent || !lampImgs.list.length) return;
+  lampSent = key;
+  const lum = lampImgs.compose(params.lampDiameter, params.lampHeight, 5);
+  sendCompute(
+    { type: 'inputs', slot: 'lamp', models: false, panels: lampImgs.list.length, raw: { luminance: lum, depth: { w: 0, h: 0, data: new Float32Array(0) }, mask: null } },
+    [lum.data.buffer],
+  );
 }
 
 // ---- views ---------------------------------------------------------------------------------------
@@ -321,9 +394,15 @@ function drawRelief(z: Float32Array, nx: number, ny: number, stats: ReliefStats)
 
 // ---- photo loading -------------------------------------------------------------------------------
 function setExportsEnabled(on: boolean) {
-  // STEP is for CAM; a lithophane goes to the slicer as STL
+  // STEP and height maps are for CAM; a lithophane goes to the slicer as STL / 3MF
   const litho = params.mode === 'lithophane';
-  for (const id of ['expSurface', 'expSolid', 'expStl']) ($(id) as HTMLButtonElement).disabled = !on || (litho && id !== 'expStl');
+  const flat = litho && params.lithoShape !== 'curved' && params.lithoShape !== 'lamp';
+  const show: Record<string, boolean> = { expSurface: !litho, expSolid: !litho, expStl: true, exp3mf: litho, expPng: !litho, expStand: flat };
+  for (const [id, vis] of Object.entries(show)) {
+    const b = $(id) as HTMLButtonElement;
+    b.hidden = !vis;
+    b.disabled = !on;
+  }
 }
 
 // ---- mask sanity check --------------------------------------------------------------------------
@@ -358,8 +437,10 @@ async function loadPhoto(file: File) {
   lastFile = file;
   lastMask = null;
   $('maskWarn').hidden = true;
+  $('cropRow').hidden = false;
   photoName = file.name.replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_') || 'relief';
-  haveInputs = false;
+  havePhoto = false;
+  photoModels = false;
   lastStats = null;
   setExportsEnabled(false);
   exportInfo('');
@@ -368,6 +449,25 @@ async function loadPhoto(file: File) {
     const c = $<HTMLCanvasElement>(id);
     c.getContext('2d')!.clearRect(0, 0, c.width, c.height);
   }
+  if (params.mode === 'lithophane') {
+    // a lithophane only needs the photo's brightness: no models to download or run
+    const raw = await photoLuminance(file);
+    if (file !== lastFile) return;
+    if (raw.crop) drawPhoto(file, raw.crop);
+    sendCompute({ type: 'inputs', slot: 'photo', models: false, raw }, [raw.luminance.data.buffer]);
+    havePhoto = true;
+    status('Photo loaded.' + (raw.crop ? ' Plain border around the picture trimmed off.' : ''));
+    if (isLamp() && !lampImgs.list.length) await lampImgs.add([file]);
+    busy = false;
+    requestRelief();
+    return;
+  }
+  analyze(file);
+}
+
+/** runs the depth and mask models on the photo (CNC relief) */
+function analyze(file: File) {
+  modelsRunning = true;
   status('Starting models…');
   const req: ModelRequest = {
     type: 'analyze',
@@ -420,9 +520,11 @@ function onModelMessage(ev: MessageEvent<ModelResponse>) {
       retry({ device: 'wasm' }, 'WebGPU failed on this GPU – retrying on CPU (slower)…');
       return;
     }
+    modelsRunning = false;
     status(`Model error: ${m.message}`, true);
     return;
   }
+  modelsRunning = false;
   usedMaskModel = m.maskModel;
   $('device').textContent = m.device === 'webgpu' ? 'WebGPU' : 'WASM (CPU)';
   status(
@@ -432,8 +534,9 @@ function onModelMessage(ev: MessageEvent<ModelResponse>) {
   if (m.raw.crop && lastFile) drawPhoto(lastFile, m.raw.crop);
   const t: Transferable[] = [m.raw.luminance.data.buffer, m.raw.depth.data.buffer];
   if (m.raw.mask) t.push(m.raw.mask.data.buffer);
-  sendCompute({ type: 'inputs', raw: m.raw }, t);
-  haveInputs = true;
+  sendCompute({ type: 'inputs', slot: 'photo', models: true, raw: m.raw }, t);
+  havePhoto = true;
+  photoModels = true;
   busy = false;
   requestRelief();
 }
@@ -454,8 +557,18 @@ computeWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
   if (m.type === 'relief') {
     busy = false;
     lastStats = m.stats;
-    preview.setHeightfield(m.z, m.nx, m.ny, m.stats.widthMm, m.stats.heightMm, curveRadius(m.stats.widthMm));
-    drawRelief(m.z, m.nx, m.ny, m.stats);
+    let shown = m.z;
+    if (m.mesh) preview.setLithoMesh(m.mesh.pos, m.mesh.idx, m.mesh.h, m.mesh.topTris, m.mesh.upright);
+    else {
+      const view = viewMode();
+      if (m.left && view === 'cut') {
+        shown = new Float32Array(m.z.length);
+        for (let k = 0; k < shown.length; k++) shown[k] = m.z[k] + m.left[k];
+      }
+      preview.setHeightfield(shown, m.nx, m.ny, m.stats.widthMm, m.stats.heightMm);
+      preview.setReach(m.left && view === 'reach' ? m.left : null);
+    }
+    drawRelief(shown, m.nx, m.ny, m.stats);
     updateDims();
     setExportsEnabled(true);
     if (dirty) requestRelief();
@@ -476,12 +589,19 @@ computeWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
     return;
   }
   if (m.type === 'exported' && m.id === exportId) {
-    const ext = m.kind === 'stl' ? 'stl' : 'step';
-    const suffix = m.kind === 'stl' ? '' : `_${m.kind}`;
-    const blob = new Blob([m.bytes as BlobPart], { type: m.kind === 'stl' ? 'model/stl' : 'application/step' });
+    const FILES: Record<ExportKind, [string, string, string]> = {
+      surface: ['_surface', 'step', 'application/step'],
+      solid: ['_solid', 'step', 'application/step'],
+      stl: ['', 'stl', 'model/stl'],
+      '3mf': ['', '3mf', 'model/3mf'],
+      png: ['_heightmap', 'png', 'image/png'],
+      stand: ['_stand', 'stl', 'model/stl'],
+    };
+    const [suffix, ext, mime] = FILES[m.kind];
+    const blob = new Blob([m.bytes as BlobPart], { type: mime });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${photoName}${suffix}.${ext}`;
+    a.download = `${isLamp() && m.kind !== 'stand' ? 'lamp_shade' : photoName}${suffix}.${ext}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -491,11 +611,11 @@ computeWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
   }
 };
 
-function doExport(kind: 'surface' | 'solid' | 'stl', label: string) {
-  if (!haveInputs) return;
+function doExport(kind: ExportKind, label: string) {
+  if (!haveInputsFor()) return;
   exportKind = label;
   setExportsEnabled(false);
-  exportInfo(kind === 'stl' ? 'Building STL…' : 'Fitting B-spline surface…');
+  exportInfo(kind === 'surface' || kind === 'solid' ? 'Fitting B-spline surface…' : `Building ${label}…`);
   sendCompute({ type: 'export', id: ++exportId, params: { ...params }, kind, name: photoName });
 }
 
@@ -520,7 +640,8 @@ $('mode').addEventListener('change', () => {
   else if (fin.value === 'backlit') fin.value = 'clay';
   preview.setFinish(fin.value as Finish);
   syncOutputs();
-  setExportsEnabled(Boolean(lastStats));
+  // a photo loaded for a relief still needs its brightness sent for a lithophane, and vice versa
+  if (params.mode === 'lithophane' && lastFile && !havePhoto && !modelsRunning) loadPhoto(lastFile);
   onParamsChanged();
 });
 $('resetAll').addEventListener('click', () => {
@@ -577,6 +698,41 @@ $('resetView').addEventListener('click', () => preview.resetView());
 $('expSurface').addEventListener('click', () => doExport('surface', 'STEP surface'));
 $('expSolid').addEventListener('click', () => doExport('solid', 'STEP solid'));
 $('expStl').addEventListener('click', () => doExport('stl', 'STL'));
+$('exp3mf').addEventListener('click', () => doExport('3mf', '3MF'));
+$('expPng').addEventListener('click', () => doExport('png', 'Height map'));
+$('expStand').addEventListener('click', () => doExport('stand', 'Stand STL'));
+$('view').addEventListener('change', () => {
+  updateDims();
+  requestRelief();
+});
+let spinning = false;
+$('spin').addEventListener('click', () => {
+  spinning = !spinning;
+  $('spin').classList.toggle('on', spinning);
+  preview.setSpin(spinning);
+});
+$('cropBtn').addEventListener('click', async () => {
+  if (!lastFile) return;
+  const f = await cropDialog(lastFile);
+  if (f) loadPhoto(f);
+});
+const lampFiles = $<HTMLInputElement>('lampFiles');
+lampFiles.addEventListener('change', () => {
+  if (lampFiles.files) lampImgs.add([...lampFiles.files]);
+  lampFiles.value = '';
+});
+$('lampClear').addEventListener('click', () => lampImgs.clear());
+const lampBox = $('lampBox');
+lampBox.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  lampBox.classList.add('over');
+});
+lampBox.addEventListener('dragleave', () => lampBox.classList.remove('over'));
+lampBox.addEventListener('drop', (e) => {
+  e.preventDefault();
+  lampBox.classList.remove('over');
+  if (e.dataTransfer?.files) lampImgs.add([...e.dataTransfer.files]);
+});
 
 // offline support (production builds only)
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {

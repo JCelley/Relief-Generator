@@ -20,10 +20,29 @@ function ortEnableInt64(): Plugin {
   };
 }
 
+/**
+ * Gives the service worker's cache a new name on every build, so each deploy starts a fresh
+ * offline cache and the old one (with all the previous build's hashed files) is deleted.
+ */
+function swCacheVersion(): Plugin {
+  return {
+    name: 'sw-cache-version',
+    apply: 'build',
+    async writeBundle(opts) {
+      const { readFile, writeFile } = await import('node:fs/promises');
+      const { join } = await import('node:path');
+      const file = join(opts.dir ?? 'dist', 'sw.js');
+      const src = await readFile(file, 'utf8');
+      if (!src.includes("'relief-app-v1'")) this.error('sw-cache-version: cache name not found in sw.js');
+      await writeFile(file, src.replace("'relief-app-v1'", `'relief-app-${Date.now().toString(36)}'`));
+    },
+  };
+}
+
 export default defineConfig({
   // relative base so the build works on GitHub Pages under /<repo>/
   base: './',
-  plugins: [ortEnableInt64()],
+  plugins: [ortEnableInt64(), swCacheVersion()],
   worker: { format: 'es', plugins: () => [ortEnableInt64()] },
   build: { target: 'es2022', chunkSizeWarningLimit: 4000 },
   // keep onnxruntime-web out of the dev pre-bundler so the transform above also runs in `npm run dev`

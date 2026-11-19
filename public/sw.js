@@ -1,5 +1,6 @@
 // Offline support: app shell + same-origin assets are cached as they are fetched.
 // Model weights are cached separately by transformers.js (Cache Storage "transformers-cache").
+// renamed on every build (vite.config.ts) so an old deploy's files are dropped
 const CACHE = 'relief-app-v1';
 
 self.addEventListener('install', (e) => {

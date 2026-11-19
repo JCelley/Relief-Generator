@@ -21,6 +21,10 @@
             <input type="file" id="file" accept="image/*" hidden />
             <strong>Drop a photo</strong> or click to choose
           </label>
+          <div class="row" id="cropRow" hidden>
+            <span></span>
+            <button type="button" class="small" id="cropBtn" title="Rotate the photo or keep only part of it">Crop / rotate…</button>
+          </div>
           <div class="row">
             <label for="maskModel">Subject mask</label>
             <select id="maskModel">
@@ -88,6 +92,15 @@
             <span class="preset-mod"><span id="presetModText">Sliders changed from the preset</span> <button type="button" class="small" id="presetReset">Reset</button></span>
           </div>
           <div id="basic"></div>
+          <div id="lampBox" class="lamp" hidden>
+            <div class="lamp-head">
+              <span>Pictures around the lamp <span id="lampCount"></span></span>
+              <label class="small-btn">Add pictures…<input type="file" id="lampFiles" accept="image/*" multiple hidden /></label>
+              <button type="button" class="small" id="lampClear">Clear</button>
+            </div>
+            <div id="lampList" class="lamp-list"></div>
+            <div class="lamp-hint">They wrap around in this order, left to right as seen from outside. Use 6 or more frames of a scene that changes a little each time (frames from a video work well) to make an animation as it turns. Drop pictures here too.</div>
+          </div>
           <div id="lithoWarn" class="warn" hidden></div>
           <details id="lithoTips" class="tips" hidden>
             <summary>Printing tips</summary>
@@ -97,7 +110,9 @@
               <li><b>Orientation:</b> stand it upright on its bottom edge with a brim. Curved ones are exported standing up already.</li>
               <li><b>Light:</b> a white LED (about 300–600 lumens) a few centimetres behind it.</li>
               <li><b>Test first:</b> set the width to about 2" and print a small piece to check your filament.</li>
-              <li><b>Too dark?</b> Lower max thickness. <b>Washed-out highlights?</b> Raise min thickness.</li>
+              <li><b>Too dark?</b> Lower max thickness or raise Brightness. <b>Washed-out highlights?</b> Raise min thickness.</li>
+              <li><b>Lamp shade:</b> print standing on its bottom edge, no supports, 100 % infill. Set the lamp diameter so it slips over your LED puck light (or use the bottom lip to rest on it). Spin it slowly to see the pictures animate.</li>
+              <li><b>Shapes with a hanging hole:</b> print flat on the bed (picture side up) or upright with a brim.</li>
             </ul>
           </details>
           <details id="advancedBox">
@@ -116,6 +131,9 @@
             <button id="expSurface" disabled title="Top surface only, as a B-spline surface body">STEP surface</button>
             <button id="expSolid" disabled title="Closed solid: B-spline top, planar walls and bottom">STEP solid</button>
             <button id="expStl" disabled title="Watertight triangle mesh">STL</button>
+            <button id="exp3mf" disabled title="Same mesh as the STL in a smaller 3MF package that slicers open directly">3MF</button>
+            <button id="expPng" disabled title="16-bit greyscale height map (black = lowest, white = highest) for Vectric Aspire, Carveco or laser software">Height map</button>
+            <button id="expStand" disabled title="Separate stand with a tilted slot that the flat lithophane slides into">Stand STL</button>
           </div>
           <div id="exportInfo" class="status"></div>
         </section>
@@ -143,6 +161,14 @@
                   <option value="backlit">Backlit</option>
                 </select>
               </label>
+              <label id="viewCtl" title="Design: the surface that is exported. As cut: what your finishing tool will leave (it cannot get into corners tighter than its tip). Missed areas: the design with the spots the tool cannot reach in red.">Show
+                <select id="view">
+                  <option value="cut">As cut</option>
+                  <option value="design">Design</option>
+                  <option value="reach">Missed areas</option>
+                </select>
+              </label>
+              <button id="spin" class="small" title="Turn the part slowly">Spin</button>
               <button id="resetView" class="small">Reset view</button>
             </div>
           </div>

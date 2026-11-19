@@ -12,12 +12,23 @@ photo ─► subject mask ─► depth (Depth Anything V2 Small) ─► relief c
 ## Using it
 
 1. `npm install`, then `npm run dev` and open the printed URL in Chrome or Edge (WebGPU). You can also use the GitHub Pages build.
-2. Drop a photo. On the first run the models download (about 140 MB) and are cached by the browser after that.
+2. Drop a photo. On the first run the models download (about 140 MB) and are cached by the browser after that. **Crop / rotate…** under the drop area turns the photo or keeps only part of it (free or fixed shapes such as square).
 3. Pick a preset (Portrait / Pet / Object / Landscape / Illustration), set the width and relief height, and judge the result in the 3D view by moving the raking light. Use **Landscape** for scenes with no single subject (sunsets, trees, buildings): it keeps the whole picture instead of cutting out a subject. A plain border around the picture (poster matte, black bars) is trimmed off automatically so it doesn't become a raised frame.
 4. Export:
    - **STEP surface**: one smooth B-spline face (top only). Define stock in Fusion.
    - **STEP solid**: B-spline top, 4 planar walls and a planar bottom, sewn into one closed body (needs base thickness > 0).
    - **STL**: watertight mesh straight from the grid.
+   - **Height map**: 16-bit greyscale PNG (black = lowest, white = highest, one pixel per grid point) for Vectric Aspire, Carveco or laser software. The export info gives the Z range to enter there.
+
+### What the cutter will leave
+
+Set **Finishing tool** (ball end mill, tapered ball nose, or V-bit / engraver), its **Tool Ø** (ball Ø, tapered-ball tip Ø, or the V-bit's flat tip, 0 = sharp) and, for tapered and V tools, the **Included angle**. The 3D view's **Show** menu then offers:
+
+- **As cut** (default): the surface the tool actually leaves. It can't get into corners tighter than its tip, so those come out filleted.
+- **Design**: the exported surface.
+- **Missed areas**: the design with the spots the tool can't reach in red (full red = 0.5 mm or more left). The info box gives the share of the surface and the most material left.
+
+This is a full-coverage finishing pass (no stepover scallops). The exported STEP / STL is always the design; Fusion does the cutting. The tool also sets the auto grid spacing (tool Ø / 4, at least 0.2 mm for tapered and V tools).
 
 Units in the files are mm. The bottom of the part is Z = 0, the base top is at Z = base thickness, and the highest point is at base + relief height. X/Y run from 0 to width/height, with the image's bottom-left corner at the origin.
 
@@ -29,13 +40,19 @@ Set **Make** to **Lithophane (3D print)**. Instead of a carved shape, the tool m
 |---|---|---|
 | Max thickness | 3 mm | Thickness of the darkest areas. 2.5–4 mm for white PLA; above 4 mm shadows go solid and lose detail. Lower it if the print is too dark. |
 | Min thickness | 0.8 mm | Thickness of the lightest areas. 0.6–0.8 mm with a 0.4 mm nozzle; below 0.6 mm it can break or print with pinholes. Raise it if highlights look washed out. |
+| Brightness / Contrast | 0 / 1 | Adjust the picture before it becomes thickness. |
 | Midtone darkness | 1 | Above 1 makes midtones thicker (darker when lit), below 1 lighter. |
-| Shape | Flat | **Curved (arc)** bends the plate around a vertical axis: picture on the outside, light goes inside, and it stands on its own. |
+| Hanging hole | 0 | Hole near the top centre (below the dip on a heart) with a solid ring around it. |
+| Shape | Flat rectangle | **Rounded corners**, **Oval / circle** and **Heart** cut the plate to that outline (it fits inside the picture; crop the photo square for a circle). **Curved (arc)** bends the plate around a vertical axis: picture on the outside, light goes inside, and it stands on its own. **Lamp shade**: see below. |
 | Radius | 80 mm | Curved only: radius of the inside face. Smaller = more curved. The width is measured along the curve; the info box shows the arc angle and footprint. Radii so small the ends would touch are raised automatically. |
 | Frame | 3 mm | Solid full-thickness border; stiffens the plate. 0 = none. |
 | Mesh resolution (Advanced) | 0.2 mm | STL point spacing, about half the nozzle diameter. |
 
-The 3D view switches to a **Backlit** finish that simulates light shining through; pick Clay to see the geometry. Export is STL only. Flat: back at Z = 0, picture side up. Curved: exported standing up (bottom edge at Z = 0), ready to print upright.
+### Lamp shade
+
+Pick **Shape → Lamp shade** and add pictures (button or drag and drop; reorder with ◀ ▶). They wrap all the way around a cylinder in that order, each one centre-cropped to an equal slice (π × diameter ÷ number of pictures). For a flip-book effect as it turns, use 6 or more frames of a scene that changes a little each time; frames from a short video work well. Settings: **Lamp diameter** (inside), **Lamp height**, **Divider** (solid strip between pictures), **Frame** (solid bands top and bottom) and **Bottom lip** (2 mm inward ledge to rest on a puck light; the info box shows the opening). **Spin** in the 3D view turns it. It is exported standing up, ready to print without supports.
+
+The 3D view switches to a **Backlit** finish that simulates light shining through; pick Clay to see the geometry. Export is STL or **3MF** (the same mesh in a much smaller file that slicers open directly). Flat: back at Z = 0, picture side up. Curved and lamp shades: exported standing up (bottom edge at Z = 0), ready to print upright. Flat shapes also get a **Stand STL**: a block with a slot tilted 10° back, sized to the plate's max thickness plus 0.4 mm. A lithophane needs only the photo's brightness, so no models are downloaded or run in this mode.
 
 The panel warns when min thickness is under 0.6 mm, max is over 4 mm, or the two are less than 1.5 mm apart.
 
@@ -79,7 +96,10 @@ The core pipeline (`src/core/`) is pure TypeScript with no DOM, so it runs uncha
 | `src/core/resample.ts` | Tool-driven machining grid, pre-fit smoothing |
 | `src/core/bspline.ts` | Separable least-squares bicubic B-spline fit, tolerance-driven control net |
 | `src/core/step.ts` | STEP AP214 writer (surface body or closed solid) |
-| `src/core/stl.ts` | Watertight binary STL |
+| `src/core/mesh.ts` | Closed meshes: heightfield, outline-cut shapes, lamp shade, stand; binary STL |
+| `src/core/litho.ts` | Lithophane thickness mapping, outlines (rounded, oval, heart, hanging hole) |
+| `src/core/cutter.ts` | Finishing-tool simulation (ball, tapered ball, V-bit) |
+| `src/core/files.ts` | 3MF (zip) and 16-bit PNG height map writers |
 | `src/models/` | transformers.js model stage, BiRefNet WebGPU graph patch |
 | `src/workers/` | Model worker (WebGPU/WASM) and compute worker (relief, fit, export) |
 | `src/ui/` | UI, three.js preview with raking light |
@@ -112,7 +132,7 @@ The core pipeline (`src/core/`) is pure TypeScript with no DOM, so it runs uncha
 | 4 | STEP surface export | ✅ written and validated in OpenCascade; **needs a Fusion import + scallop toolpath test** |
 | 5 | STEP solid + STL | ✅ |
 | 6 | Gradient-domain compression (v2) | ✅ (default for Portrait/Pet) |
-| 7 | Nice-to-haves | Offline service worker ✅; mask brush, crop/rotate, saved sessions not started |
+| 7 | Nice-to-haves | Offline service worker ✅ (fresh cache per deploy); crop/rotate ✅; mask brush and saved sessions not started |
 
 ## Open questions for the owner
 

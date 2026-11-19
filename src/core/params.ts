@@ -56,8 +56,12 @@ export interface ReliefParams {
   /** remove mask features thinner than ~2× this radius (mm), e.g. whiskers. 0 = off */
   maskCleanup: number;
 
-  /** finishing tool diameter (mm) */
+  /** finishing tool: ball end mill, tapered ball nose, or V-bit / engraver */
+  toolType: 'ball' | 'taperedBall' | 'vbit';
+  /** finishing tool diameter (mm): ball Ø, tapered-ball tip Ø, or V-bit flat tip Ø (0 = sharp) */
   toolDiameter: number;
+  /** tapered ball / V-bit included angle (degrees) */
+  toolAngle: number;
   /** machining grid spacing (mm); 0 = auto (tool radius / 2) */
   gridSpacing: number;
   /** B-spline approximation tolerance (mm) */
@@ -74,10 +78,28 @@ export interface ReliefParams {
   /** lithophane: >1 darkens the midtones (thicker), <1 lightens them */
   lithoGamma: number;
   /** lithophane: flat plate or bent into an arc (picture outside, light inside) */
-  lithoShape: 'flat' | 'curved';
+  lithoShape: LithoShape;
   /** curved lithophane: radius of the inside (back) face, mm */
   lithoRadius: number;
+  /** lithophane: brightness offset applied to the photo before thickness mapping (-0.5..0.5) */
+  lithoBrightness: number;
+  /** lithophane: contrast multiplier around mid-grey */
+  lithoContrast: number;
+  /** rounded-rectangle shape: corner radius (mm) */
+  lithoCorner: number;
+  /** hanging hole diameter at the top (mm), 0 = none (flat shapes) */
+  lithoHole: number;
+  /** lamp shade: inside diameter (mm) */
+  lampDiameter: number;
+  /** lamp shade: height (mm) */
+  lampHeight: number;
+  /** lamp shade: solid divider between pictures (mm), 0 = none */
+  lampDivider: number;
+  /** lamp shade: inward lip at the bottom to rest on a puck light (mm), 0 = none */
+  lampLip: number;
 }
+
+export type LithoShape = 'flat' | 'rounded' | 'oval' | 'heart' | 'curved' | 'lamp';
 
 /** Smallest radius that still leaves a gap between the two ends of a curved lithophane (~340° arc). */
 export function minLithoRadius(widthMm: number): number {
@@ -107,7 +129,9 @@ export const DEFAULT_PARAMS: ReliefParams = {
   guideEps: 0.003,
   maskThreshold: 0.5,
   maskCleanup: 0.8,
+  toolType: 'ball',
   toolDiameter: 1.5875,
+  toolAngle: 60,
   gridSpacing: 0,
   fitTolerance: 0.01,
   lithoMin: 0.8,
@@ -117,6 +141,14 @@ export const DEFAULT_PARAMS: ReliefParams = {
   lithoGamma: 1,
   lithoShape: 'flat',
   lithoRadius: 80,
+  lithoBrightness: 0,
+  lithoContrast: 1,
+  lithoCorner: 10,
+  lithoHole: 0,
+  lampDiameter: 100,
+  lampHeight: 120,
+  lampDivider: 1.5,
+  lampLip: 0,
 };
 
 export type PresetName = 'portrait' | 'pet' | 'object' | 'landscape' | 'illustration';
@@ -135,5 +167,8 @@ export function withPreset(name: PresetName, base: ReliefParams = DEFAULT_PARAMS
 }
 
 export function effectiveGridSpacing(p: ReliefParams): number {
-  return p.gridSpacing > 0 ? p.gridSpacing : p.toolDiameter / 4;
+  if (p.gridSpacing > 0) return p.gridSpacing;
+  // a sharp or tiny-tipped V-bit would give a needlessly fine grid
+  const d = Math.max(p.toolDiameter, p.toolType === 'ball' ? 0.2 : 0.8);
+  return d / 4;
 }

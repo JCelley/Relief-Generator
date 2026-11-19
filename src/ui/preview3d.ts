@@ -28,9 +28,16 @@ export class ReliefPreview {
   /** lithophane view: light shining through the plate, brightness from the thickness */
   private backlitMat = new THREE.MeshBasicMaterial({ vertexColors: true });
   private edgeMat = new THREE.MeshBasicMaterial({ color: 0x2a2620 });
+  /** vertex-coloured relief for the "can't reach" view */
+  private reachMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
+  private reach: Float32Array | null = null;
+  /** lithophane mesh: picture surface (smooth) and the rest (flat-shaded walls and back) */
+  private lithoTop: THREE.Mesh | null = null;
+  private lithoRest: THREE.Mesh | null = null;
+  private lithoH: Float32Array | null = null;
   private finish: Finish = 'clay';
   private lastZ: { z: Float32Array; nx: number; ny: number } | null = null;
-  private size = { w: 100, h: 100 };
+  private size = { w: 100, h: 100, d: 0 };
   private azimuth = 135;
   private elevation = 25;
   private ro: ResizeObserver;
@@ -75,10 +82,142 @@ export class ReliefPreview {
     const lit = this.finish === 'backlit';
     if (this.mesh) {
       if (lit) this.updateBacklitColors();
-      this.mesh.material = lit ? this.backlitMat : this.material;
+      else if (this.reach) this.updateReachColors();
+      this.mesh.material = lit ? this.backlitMat : this.reach ? this.reachMat : this.material;
     }
     if (this.skirt) this.skirt.material = lit ? this.edgeMat : this.material;
+    if (this.lithoTop) {
+      if (lit) this.updateLithoColors();
+      this.lithoTop.material = lit ? this.backlitMat : this.material;
+    }
+    if (this.lithoRest) this.lithoRest.material = lit ? this.edgeMat : this.material;
     this.scene.background = new THREE.Color(lit ? 0x0c0c0d : 0x1b1c1e);
+  }
+
+  /** highlights material the cutter cannot reach (mm left per grid point), or null to clear */
+  setReach(left: Float32Array | null) {
+    this.reach = left;
+    this.applyMaterials();
+    this.requestRender();
+  }
+
+  private updateReachColors() {
+    if (!this.mesh || !this.lastZ || !this.reach) return;
+    const { nx, ny } = this.lastZ;
+    const geom = this.mesh.geometry as THREE.BufferGeometry;
+    const n = nx * ny;
+    let col = geom.getAttribute('color') as THREE.BufferAttribute | undefined;
+    if (!col || col.count !== n) {
+      col = new THREE.BufferAttribute(new Float32Array(n * 3), 3);
+      geom.setAttribute('color', col);
+    }
+    const base = this.finish === 'backlit' ? new THREE.Color(FINISHES.clay.color) : new THREE.Color(FINISHES[this.finish].color);
+    const hot = new THREE.Color(0xe8432e);
+    const c = new THREE.Color();
+    for (let iy = 0; iy < ny; iy++) {
+      const j = ny - 1 - iy;
+      for (let ix = 0; ix < nx; ix++) {
+        const v = this.reach[j * nx + ix];
+        // nothing below 0.02 mm (grid noise); full red at 0.5 mm left
+        const t = Math.min(1, Math.max(0, (v - 0.02) / 0.48));
+        c.copy(base).lerp(hot, t > 0 ? 0.35 + 0.65 * t : 0);
+        col.setXYZ(iy * nx + ix, c.r, c.g, c.b);
+      }
+    }
+    col.needsUpdate = true;
+    this.reachMat.metalness = this.finish === 'aluminum' ? 0.6 : 0;
+    this.reachMat.roughness = this.finish === 'aluminum' ? 0.5 : 0.9;
+  }
+
+  private updateLithoColors() {
+    if (!this.lithoTop || !this.lithoH) return;
+    const h = this.lithoH;
+    let lo = Infinity, hi = -Infinity;
+    for (const v of h) {
+      if (v < 0) continue;
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    const geom = this.lithoTop.geometry as THREE.BufferGeometry;
+    let col = geom.getAttribute('color') as THREE.BufferAttribute | undefined;
+    if (!col || col.count !== h.length) {
+      col = new THREE.BufferAttribute(new Float32Array(h.length * 3), 3);
+      geom.setAttribute('color', col);
+    }
+    for (let k = 0; k < h.length; k++) {
+      const b = h[k] < 0 ? 0 : backlitBrightness(h[k], lo, hi);
+      col.setXYZ(k, b, b * 0.93, b * 0.8);
+    }
+    col.needsUpdate = true;
+  }
+
+  /** shows or hides the relief heightfield objects vs the lithophane mesh */
+  private showLitho(on: boolean) {
+    if (this.mesh) this.mesh.visible = !on;
+    if (this.skirt) this.skirt.visible = !on;
+    if (this.lithoTop) this.lithoTop.visible = on;
+    if (this.lithoRest) this.lithoRest.visible = on;
+  }
+
+  /**
+   * Lithophane preview from its printable mesh (see core/mesh). Flat ones lie picture-up; upright
+   * ones (curved, lamp shade) stand on Z = 0 and are turned so the picture faces the camera.
+   */
+  setLithoMesh(pos: Float32Array, idx: Uint32Array, h: Float32Array, topTris: number, upright: boolean) {
+    const p = new Float32Array(pos.length);
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (let k = 0; k < pos.length; k += 3) {
+      const x = pos[k], y = upright ? pos[k + 2] : pos[k + 1], zz = upright ? -pos[k + 1] : pos[k + 2];
+      p[k] = x; p[k + 1] = y; p[k + 2] = zz;
+      for (let c = 0; c < 3; c++) {
+        lo[c] = Math.min(lo[c], p[k + c]);
+        hi[c] = Math.max(hi[c], p[k + c]);
+      }
+    }
+    // centre in x / y; flat parts keep the back at z = 0 like the relief view
+    const cx = (lo[0] + hi[0]) / 2, cy = (lo[1] + hi[1]) / 2, cz = upright ? (lo[2] + hi[2]) / 2 : 0;
+    for (let k = 0; k < p.length; k += 3) {
+      p[k] -= cx; p[k + 1] -= cy; p[k + 2] -= cz;
+    }
+    const w = hi[0] - lo[0], hh = hi[1] - lo[1];
+    const sizeChanged = Math.abs(w - this.size.w) > 1e-3 || Math.abs(hh - this.size.h) > 1e-3;
+    this.size = { w, h: hh, d: upright ? hi[2] - lo[2] : 0 };
+
+    const top = new THREE.BufferGeometry();
+    top.setAttribute('position', new THREE.BufferAttribute(p, 3));
+    top.setIndex(new THREE.BufferAttribute(idx.slice(0, topTris * 3), 1));
+    top.computeVertexNormals();
+    const restIdx = idx.subarray(topTris * 3);
+    const rp = new Float32Array(restIdx.length * 3);
+    for (let t = 0; t < restIdx.length; t++) {
+      const v = restIdx[t] * 3;
+      rp[t * 3] = p[v]; rp[t * 3 + 1] = p[v + 1]; rp[t * 3 + 2] = p[v + 2];
+    }
+    const rest = new THREE.BufferGeometry();
+    rest.setAttribute('position', new THREE.BufferAttribute(rp, 3));
+    rest.computeVertexNormals();
+    if (!this.lithoTop) {
+      this.lithoTop = new THREE.Mesh(top, this.material);
+      this.lithoRest = new THREE.Mesh(rest, this.material);
+      this.scene.add(this.lithoTop, this.lithoRest);
+    } else {
+      this.lithoTop.geometry.dispose();
+      this.lithoRest!.geometry.dispose();
+      this.lithoTop.geometry = top;
+      this.lithoRest!.geometry = rest;
+    }
+    this.lithoH = h;
+    this.showLitho(true);
+    this.applyMaterials();
+    this.placeLight();
+    if (sizeChanged) this.resetView();
+    this.requestRender();
+  }
+
+  /** slowly turns the view around the part (lamp shades) */
+  setSpin(on: boolean) {
+    this.controls.autoRotate = on;
+    this.controls.autoRotateSpeed = 6;
   }
 
   private updateBacklitColors() {
@@ -124,12 +263,12 @@ export class ReliefPreview {
 
   /**
    * z: CAD-oriented heightfield (row 0 = bottom edge), in mm.
-   * bendRadius > 0 shows the part bent around a vertical axis (curved lithophane): the back on a
-   * cylinder of that radius, the picture side outward, facing the camera.
    */
-  setHeightfield(z: Float32Array, nx: number, ny: number, widthMm: number, heightMm: number, bendRadius = 0) {
+  setHeightfield(z: Float32Array, nx: number, ny: number, widthMm: number, heightMm: number) {
+    const bendRadius = 0;
+    this.showLitho(false);
     const sizeChanged = Math.abs(widthMm - this.size.w) > 1e-6 || Math.abs(heightMm - this.size.h) > 1e-6;
-    this.size = { w: widthMm, h: heightMm };
+    this.size = { w: widthMm, h: heightMm, d: 0 };
     let geom = this.mesh?.geometry as THREE.PlaneGeometry | undefined;
     const p = geom?.parameters;
     if (!geom || !p || p.widthSegments !== nx - 1 || p.heightSegments !== ny - 1 || p.width !== widthMm || p.height !== heightMm) {
@@ -229,7 +368,8 @@ export class ReliefPreview {
   }
 
   resetView() {
-    const d = Math.max(this.size.w, this.size.h) / (2 * Math.tan((this.camera.fov * Math.PI) / 360)) * 1.15;
+    // a standing part (curved, lamp) comes towards the camera by half its depth
+    const d = (Math.max(this.size.w, this.size.h) / (2 * Math.tan((this.camera.fov * Math.PI) / 360))) * 1.25 + this.size.d / 2;
     this.camera.position.set(0, -d * 0.12, d);
     this.camera.near = d / 100;
     this.camera.far = d * 10;
