@@ -102,7 +102,7 @@ export class ReliefPreview {
     }
     if (this.lithoRest) this.lithoRest.material = lit ? this.edgeMat : this.material;
     // light: mid grey so dark thick areas, edges and the brown wood finish stand out
-    const bg = this.backdrop === 'light' ? (lit ? 0x5d636b : 0x9aa0a6) : lit ? 0x0c0c0d : 0x1b1c1e;
+    const bg = this.backdrop === 'light' ? (lit ? 0x474c53 : 0x5f646b) : lit ? 0x0c0c0d : 0x1b1c1e;
     this.scene.background = new THREE.Color(bg);
   }
 
