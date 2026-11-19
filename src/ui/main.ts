@@ -770,6 +770,21 @@ $('lightEl').addEventListener('input', light);
 light();
 $('finish').addEventListener('change', () => preview.setFinish(($('finish') as HTMLSelectElement).value as Finish));
 $('resetView').addEventListener('click', () => preview.resetView());
+const backdropSel = $('backdrop') as HTMLSelectElement;
+try {
+  backdropSel.value = localStorage.getItem('relief-generator:backdrop') === 'dark' ? 'dark' : 'light';
+} catch {
+  /* storage unavailable */
+}
+preview.setBackdrop(backdropSel.value as 'light' | 'dark');
+backdropSel.addEventListener('change', () => {
+  preview.setBackdrop(backdropSel.value as 'light' | 'dark');
+  try {
+    localStorage.setItem('relief-generator:backdrop', backdropSel.value);
+  } catch {
+    /* storage unavailable */
+  }
+});
 
 $('expSurface').addEventListener('click', () => doExport('surface', 'STEP surface'));
 $('expSolid').addEventListener('click', () => doExport('solid', 'STEP solid'));

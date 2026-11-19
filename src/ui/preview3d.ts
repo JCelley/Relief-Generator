@@ -27,7 +27,10 @@ export class ReliefPreview {
   private material = new THREE.MeshStandardMaterial({ ...FINISHES.clay, flatShading: false });
   /** lithophane view: light shining through the plate, brightness from the thickness */
   private backlitMat = new THREE.MeshBasicMaterial({ vertexColors: true });
-  private edgeMat = new THREE.MeshBasicMaterial({ color: 0x2a2620 });
+  /** walls and back of a lit lithophane: plain shaded PLA, so the outline and thickness read clearly */
+  private edgeMat = new THREE.MeshStandardMaterial({ color: 0xb8b2a6, roughness: 0.9, metalness: 0 });
+  /** light (default) or dark backdrop */
+  private backdrop: 'light' | 'dark' = 'light';
   /** vertex-coloured relief for the "can't reach" view */
   private reachMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
   private reach: Float32Array | null = null;
@@ -68,6 +71,12 @@ export class ReliefPreview {
     tick();
   }
 
+  setBackdrop(b: 'light' | 'dark') {
+    this.backdrop = b;
+    this.applyMaterials();
+    this.requestRender();
+  }
+
   setFinish(f: Finish) {
     this.finish = f;
     if (f !== 'backlit') {
@@ -92,7 +101,9 @@ export class ReliefPreview {
       this.lithoTop.material = lit ? this.backlitMat : this.material;
     }
     if (this.lithoRest) this.lithoRest.material = lit ? this.edgeMat : this.material;
-    this.scene.background = new THREE.Color(lit ? 0x0c0c0d : 0x1b1c1e);
+    // light: mid grey so dark thick areas, edges and the brown wood finish stand out
+    const bg = this.backdrop === 'light' ? (lit ? 0x5d636b : 0x9aa0a6) : lit ? 0x0c0c0d : 0x1b1c1e;
+    this.scene.background = new THREE.Color(bg);
   }
 
   /** highlights material the cutter cannot reach (mm left per grid point), or null to clear */
