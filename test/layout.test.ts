@@ -190,3 +190,26 @@ describe('finishing round a part on bigger stock', () => {
     expect(s(100, 50)).toBe(0); // the part's surface, below the top: finished
   });
 });
+
+describe('no finishing outside the part', () => {
+  it('keeps every finishing move inside an oval part on a bigger board', async () => {
+    const { topSkip, floorSkip, finishingRuns } = await import('../src/core/cam');
+    // a dome picture with a rope border, oval, on 200 × 160 stock
+    const dome = makeGrid(200, 100, 0);
+    for (let j = 0; j < 100; j++) for (let i = 0; i < 200; i++) dome.data[j * 200 + i] = Math.max(0, 1 - Math.hypot((i - 100) / 60, (j - 50) / 40));
+    const p = P({ outlineShape: 'oval', borderStyle: 'rope', borderWidth: 10, stockW: 200, stockH: 160, stockThick: 12 });
+    const m = toMachiningGrid(dome, p);
+    const ball = { type: 'ball' as const, diameter: 1.5875, angle: 0 }, flat = { type: 'flat' as const, diameter: 6.35, angle: 0 };
+    const st = Math.max(m.zMax, 12);
+    for (const rough of [true, false]) {
+      const top = topSkip(m, ball, st)!, floor = rough ? floorSkip(m, flat, ball, 2.5) : null;
+      const skip = floor ? floor.map((v, k) => v | top[k]) : top;
+      const r = finishingRuns(m, { tool: ball, stepover: 1, dir: 'x', skip, rest: new Float32Array(m.z.length).fill(st), stockTop: st });
+      expect(r.paths.length).toBeGreaterThan(20);
+      let worst = -Infinity;
+      for (const q of r.paths) for (let k = 0; k < q.length; k += 3) worst = Math.max(worst, sdf(m.layout!.outline, q[k], q[k + 1]));
+      // the ball may reach a little past the edge to finish it, but never into the board round it
+      expect(worst).toBeLessThan(ball.diameter / 2 + 2 * m.dx);
+    }
+  });
+});

@@ -4,7 +4,7 @@ import { tipHeight, toolProfile, simulateCut, type Cutter, type ToolType } from 
 /**
  * 3-axis toolpaths straight from the machining grid, and a plain G-code writer that runs on
  * GRBL, Mach3/4, LinuxCNC and most hobby router controllers (comments in parentheses).
- * Coordinates: X0 Y0 = front-left corner of the part, X right, Y away from you; Z0 = top of the
+ * Coordinates: X0 Y0 = front-left corner of the stock, X right, Y away from you; Z0 = top of the
  * stock (or the part bottom, see `zZero`).
  */
 
@@ -793,7 +793,7 @@ export function writeGcode(input: Toolpath | Toolpath[], o: GcodeOpts): GcodeRes
   const safe = o.stockTop + o.safeZ;
   L.push(`(Relief Generator - ${ops.map((t) => t.name).join(', ')})`);
   for (const t of ops) L.push(`(${multi ? `T${t.number} ` : ''}${t.name}: ${toolLabel(t.tool, fmtLen)}, ${t.rpm} rpm, feed ${nf(t.feed)}, plunge ${nf(t.plunge)} ${o.units}/min)`);
-  L.push(`(Zero: X0 Y0 = front-left corner of the part, Z0 = ${o.zZero === 'top' ? 'top of the stock' : 'bottom of the part (spoilboard)'})`);
+  L.push(`(Zero: X0 Y0 = front-left corner of the stock, Z0 = ${o.zZero === 'top' ? 'top of the stock' : 'bottom of the part (spoilboard)'})`);
   L.push(`(Stock top ${fmtLen(o.stockTop)} above the part bottom)`);
   for (const s of o.notes ?? []) L.push(`(${s.replace(/[()]/g, '')})`);
   L.push('G90 G94 G17');
