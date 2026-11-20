@@ -62,9 +62,10 @@ export function toMachiningGrid(height01: Grid, p: ReliefParams): MachGrid {
 }
 
 /**
- * The stock with the picture placed on it and the border round it. The picture fades to the base
- * over the edge falloff at its own edges and inside the border (plus the gap); the border profile
- * is measured in from the outline. Intaglio cuts both in from the top.
+ * The stock with the part on it: the picture fades to the base over the edge falloff at its own
+ * edges and inside the border (plus the gap); the border profile is measured in from the outline;
+ * outside the outline the stock is left uncut (at its thickness, at least the part's top). Intaglio
+ * cuts both in from the top.
  */
 function composeGrid(height01: Grid, p: ReliefParams, L: Layout): MachGrid {
   const spacing = effectiveGridSpacing(p);
@@ -80,12 +81,17 @@ function composeGrid(height01: Grid, p: ReliefParams, L: Layout): MachGrid {
   const along = L.border !== 'none' && isPattern(L.border) ? makeAlong(L) : null;
   const tall = Math.max(p.reliefHeight, L.bh);
   const top = p.baseThickness + tall;
+  const uncut = Math.max(top, p.stockThick);
   const z = new Float32Array(nx * ny);
   for (let j = 0; j < ny; j++) {
     const y = j * dy;
     for (let i = 0; i < nx; i++) {
       const x = i * dx;
       const d = sdf(L.outline, x, y);
+      if (d > 0) {
+        z[j * nx + i] = uncut;
+        continue;
+      }
       let v = 0;
       // the picture
       const edge = Math.min(x - x0, x0 + pw - x, y - y0, y0 + ph - y);

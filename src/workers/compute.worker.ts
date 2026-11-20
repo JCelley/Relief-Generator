@@ -9,7 +9,7 @@ import { simulateCut, CutResult } from '../core/cutter';
 import { meshTo3mf, heightmapPng } from '../core/files';
 import { geometryKey, CAM_KEYS, type ReliefParams } from '../core/params';
 import type { ComputeRequest, ComputeResponse, PreviewPaths } from './protocol';
-import { finishingPaths, finishingRuns, floorSkip, roughRest, toolRadiusAt, roughingPaths, detailRegion, detailPaths, cutoutPath, writeGcode, previewSegments, chipRatio, type Toolpath, type GcodeOpts } from '../core/cam';
+import { finishingPaths, finishingRuns, floorSkip, topSkip, roughRest, toolRadiusAt, roughingPaths, detailRegion, detailPaths, cutoutPath, writeGcode, previewSegments, chipRatio, type Toolpath, type GcodeOpts } from '../core/cam';
 import type { Cutter } from '../core/cutter';
 import { setupSheet } from '../core/setup';
 import { outlineLoop, BORDER_STYLES } from '../core/layout';
@@ -139,10 +139,14 @@ function camOps(p: ReliefParams): { ops: Toolpath[]; mach: MachGrid } {
   }
   const fin = { tool: finishTool(p), stepover: Math.max(0.01, p.finStepover), dir: p.finDir };
   // flat floor the roughing end mill already cut to depth is left out of the finishing pass
-  const skip = p.roughOn ? floorSkip(mach, roughTool(p), finishTool(p), Math.max(0.05, p.roughStepover)) : null;
+  // and so is uncut stock round the part (nothing to cut there)
+  const floor = p.roughOn ? floorSkip(mach, roughTool(p), finishTool(p), Math.max(0.05, p.roughStepover)) : null;
+  const top = topSkip(mach, finishTool(p), st);
+  const skip = floor && top ? floor.map((v, k) => v | top[k]) : (floor ?? top);
   const finOp = { name: 'finishing', number: 2, tool: finishTool(p), rpm: p.finRpm, feed: p.finFeed, plunge: p.finPlunge };
   if (skip) {
-    const rest = roughRest(mach, roughTool(p), p.roughAllowance, Math.max(0.05, p.roughStepover), toolRadiusAt(finishTool(p), 2));
+    // without roughing the material may be anywhere up to the stock top
+    const rest = p.roughOn ? roughRest(mach, roughTool(p), p.roughAllowance, Math.max(0.05, p.roughStepover), toolRadiusAt(finishTool(p), 2)) : new Float32Array(mach.z.length).fill(st);
     ops.push({ ...finOp, ...finishingRuns(mach, { ...fin, skip, rest, stockTop: st }) });
   }
   else {
@@ -304,7 +308,12 @@ self.onmessage = async (ev: MessageEvent<ComputeRequest>) => {
             cutout: p.cutoutOn ? { tabs: p.cutoutTabs, tabW: p.cutoutTabW, tabH: p.cutoutTabH, through: p.cutoutThrough } : null,
             layout: mach.layout?.active
               ? {
-                  room: Math.min(mach.layout.outline.cx - mach.layout.outline.a, mach.layout.outline.cy - mach.layout.outline.b),
+                  room: Math.min(
+                    mach.layout.outline.cx - mach.layout.outline.a,
+                    mach.layout.outline.cy - mach.layout.outline.b,
+                    mach.layout.W - mach.layout.outline.cx - mach.layout.outline.a,
+                    mach.layout.H - mach.layout.outline.cy - mach.layout.outline.b,
+                  ),
                   tool: p.roughDiameter,
                   shape: { rect: 'rectangle', rounded: 'rounded rectangle', oval: 'oval', arch: 'arched top' }[mach.layout.outline.kind],
                   border: BORDER_STYLES.find(([v]) => v === mach.layout!.border)?.[1] ?? 'None',

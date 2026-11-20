@@ -207,6 +207,18 @@ export function roughRest(g: MachGrid, rough: Cutter, allowance: number, stepove
   return maxFilter(tip, g.nx, g.ny, Math.ceil(m / g.dx), Math.ceil(m / g.dy));
 }
 
+/**
+ * Grid points where the finishing tool would only touch the top of the stock (uncut board round a
+ * part, or a flat top at the stock height): there is nothing to cut there. Null if there are none.
+ */
+export function topSkip(g: MachGrid, finish: Cutter, stockTop: number): Uint8Array | null {
+  const tf = tipHeight(g, finish);
+  const skip = new Uint8Array(tf.length);
+  let n = 0;
+  for (let k = 0; k < tf.length; k++) if (tf[k] >= stockTop - 1e-4) (skip[k] = 1), n++;
+  return n ? skip : null;
+}
+
 export interface FinishRunOpts extends FinishOpts {
   /** grid points to leave out (see floorSkip) */
   skip: Uint8Array;

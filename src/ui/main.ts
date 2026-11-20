@@ -407,6 +407,7 @@ function syncOutputs(force = false) {
   $('widthLabel').textContent = litho ? 'Width' : 'Picture width';
   $('heightLabel').textContent = litho ? 'Height' : 'Picture height';
   vis('outlineCorner', params.outlineShape === 'rounded');
+  vis('borderInset', !(params.stockW > 0 && params.stockH > 0));
   for (const k of ['borderWidth', 'borderHeight', 'borderGap'] as const) vis(k, params.borderStyle !== 'none');
   vis('borderPitch', isPattern(params.borderStyle));
   drawLayout();
@@ -905,7 +906,9 @@ computeWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
       lastPaths = m.paths ? { ops: m.paths.ops.map((o) => ({ name: o.name, sec: o.sec })), total: m.paths.total } : null;
       lastDetailArea = m.stats.detailArea;
     }
-    preview.setToolpaths(m.paths?.ops ?? null, m.paths ? { stockTop: m.paths.stockTop, zeroZ: m.paths.zeroZ } : undefined);
+    // the stock box and origin always show for a relief; the paths when ticked
+    const stockTop = Math.max(m.stats.zMax, params.stockThick);
+    preview.setToolpaths(m.paths?.ops ?? null, params.mode === 'relief' ? { stockTop, zeroZ: params.zZero === 'top' ? stockTop : 0 } : undefined);
     updateCamInfo();
     drawRelief(shown, m.nx, m.ny, m.stats);
     drawLayout();
@@ -1042,11 +1045,22 @@ function drawLayout() {
   ctx.strokeRect(X(p.x0) + 0.5, Y(p.y0 + p.h) + 0.5, p.w * k - 1, p.h * k - 1);
   ctx.setLineDash([]);
 
-  const fmtOff = (v: number) => (v >= 0 ? '+' : '−') + fmtLen(Math.abs(v));
+  const fmtOff = (v: number) => (Math.abs(v) < 1e-6 ? '0' : (v > 0 ? '+' : '−') + fmtLen(Math.abs(v)));
+  const o = L.outline;
   const lines = [
-    `Stock ${fmtLen(L.W)} × ${fmtLen(L.H)}` + (params.stockThick > 0 ? ` × ${fmtLen(params.stockThick)}` : '') + (params.stockW || params.stockH ? '' : ' (fits the picture)'),
-    `Picture ${fmtLen(p.w)} × ${fmtLen(p.h)}, centre ${fmtOff(params.picX)} X, ${fmtOff(params.picY)} Y from the middle.`,
+    `Stock ${fmtLen(L.W)} × ${fmtLen(L.H)}` + (params.stockThick > 0 ? ` × ${fmtLen(params.stockThick)}` : '') + (params.stockW || params.stockH ? '' : ' (fits the part)'),
+    `Part ${fmtLen(2 * o.a)} × ${fmtLen(2 * o.b)}` + (params.partW || params.partH ? '' : ' (fits the picture)') + `, ${params.picX || params.picY ? `moved ${fmtOff(params.picX)} X, ${fmtOff(params.picY)} Y` : 'in the middle'}; picture ${fmtLen(p.w)} × ${fmtLen(p.h)}.`,
   ];
+  if (o.cx - o.a < -0.01 || o.cy - o.b < -0.01 || o.cx + o.a > L.W + 0.01 || o.cy + o.b > L.H + 0.01)
+    lines.push('The part runs off the stock: make the stock bigger, the part smaller, or move it.');
+  // a board thicker than the part: the part sits that much lower, as a pocket in the board
+  const partTop = params.baseThickness + Math.max(params.reliefHeight, L.bh);
+  const extra = params.stockThick - partTop;
+  if (extra > 0.1)
+    lines.push(
+      `The board is ${fmtLen(extra)} thicker than the part, so the part is ${params.cutoutOn ? 'faced down that much and cut out' : 'sunk that deep into the board'}. ` +
+        `To carve only the relief from the top of the board, set Base thickness to ${fmtLen(params.baseThickness + extra)}.`,
+    );
   if (L.border !== 'none' && isPattern(L.border)) lines.push(`Pattern repeat about ${fmtLen(L.pitch)} (fitted so the ends meet).`);
   // what falls outside the space inside the border
   const a = L.outline.a - L.window, b = L.outline.b - L.window, cx = L.outline.cx, cy = L.outline.cy;
@@ -1056,7 +1070,7 @@ function drawLayout() {
   if (L.border !== 'none' && params.outlineShape === 'rounded' && isPattern(L.border) && L.outline.c < L.bw / 2)
     lines.push('Tip: a corner radius of at least half the border width lets the pattern flow round the corners.');
   info.textContent = lines.join('\n');
-  const auto = !(params.stockW > 0) && !(params.stockH > 0);
+  const auto = !(params.stockW > 0 || params.stockH > 0 || params.partW > 0 || params.partH > 0);
   ($('picFit') as HTMLButtonElement).disabled = auto;
   ($('picFill') as HTMLButtonElement).disabled = auto;
 }
@@ -1067,13 +1081,17 @@ function setParam<K extends keyof ReliefParams>(key: K, v: ReliefParams[K]) {
   if (e) e.input.value = String(v);
 }
 
-/** picture size that fits inside (or fills) the space inside the border on the stock that was set */
+/**
+ * Picture size that fits inside (or fills) the space inside the border: of the part size that was
+ * set, or else of the biggest part the stock that was set takes (less the edge margin).
+ */
 function fitPicture(fill: boolean) {
   const L = currentLayout();
   if (!L) return;
   const aspect = L.pic.w / L.pic.h;
-  const wMax = params.stockW > 0 ? 2 * (L.outline.a - L.window) : Infinity;
-  const hMax = params.stockH > 0 ? 2 * (L.outline.b - L.window) : Infinity;
+  const box = (part: number, stock: number) => (part > 0 ? part : stock > 0 ? stock - 2 * params.borderInset : Infinity);
+  const wMax = box(params.partW, params.stockW) - 2 * L.window;
+  const hMax = box(params.partH, params.stockH) - 2 * L.window;
   const byH = hMax * aspect;
   const w = Number.isFinite(wMax) && Number.isFinite(byH) ? (fill ? Math.max(wMax, byH) : Math.min(wMax, byH)) : Math.min(wMax, byH);
   if (!(w > 1) || !Number.isFinite(w)) return;

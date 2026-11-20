@@ -202,7 +202,7 @@ export class ReliefPreview {
       if (!o.segs.length) continue;
       add(toScene(o.segs), new THREE.LineBasicMaterial({ color: PATH_COLORS[o.name] ?? 0xffffff, transparent: true, opacity: 0.75 }));
     }
-    if (ops && job) {
+    if (job) {
       // stock outline: the part footprint from the bottom to the stock top
       const t = job.stockTop, box: number[] = [];
       const c = [[0, 0], [W, 0], [W, H], [0, H]];

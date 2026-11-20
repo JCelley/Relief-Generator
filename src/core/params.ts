@@ -126,17 +126,20 @@ export interface ReliefParams {
   cutoutThrough: number;
   cutoutDir: 'climb' | 'conventional';
 
-  /** stock width / height (mm); 0 = fit the picture (plus the border and gap) */
+  /** stock (the board) width / height (mm); 0 = fit the part plus the edge margin */
   stockW: number;
   stockH: number;
-  /** picture centre relative to the stock centre (mm, + = right / up) */
+  /** part (plaque) width / height (mm); 0 = fit the picture plus the border and gap */
+  partW: number;
+  partH: number;
+  /** part centre relative to the stock centre (mm, + = right / up); the picture is centred in the part */
   picX: number;
   picY: number;
-  /** plaque outline (the outer edge of the border; the cutout follows it) */
+  /** part outline (the outer edge of the border; the cutout follows it; outside it the stock is left uncut) */
   outlineShape: OutlineShape;
   /** rounded outline: corner radius (mm) */
   outlineCorner: number;
-  /** outline inset from the stock edge (mm) */
+  /** stock fitted to the part: space round the part (mm) */
   borderInset: number;
   /** border from the library, its width, height above the base, the gap to the picture, and pattern repeat (0 = auto) */
   borderStyle: BorderStyle;
@@ -261,6 +264,8 @@ export const DEFAULT_PARAMS: ReliefParams = {
   cutoutDir: 'climb',
   stockW: 0,
   stockH: 0,
+  partW: 0,
+  partH: 0,
   picX: 0,
   picY: 0,
   outlineShape: 'rect',
@@ -320,14 +325,14 @@ export function effectiveGridSpacing(p: ReliefParams): number {
 export const CAM_KEYS = [
   'camMaterial', 'finStepover', 'finDir', 'finRpm', 'finFeed', 'finPlunge', 'finFlutes',
   'roughOn', 'roughType', 'roughDiameter', 'roughStepdown', 'roughStepover', 'roughAllowance', 'roughRpm', 'roughFeed', 'roughPlunge', 'roughFlutes',
-  'safeZ', 'zZero', 'stockThick', 'rampAngle', 'spindleDelay', 'toolChange', 'minRpm', 'maxRpm', 'maxFeed',
+  'safeZ', 'zZero', 'rampAngle', 'spindleDelay', 'toolChange', 'minRpm', 'maxRpm', 'maxFeed',
   'detailOn', 'detailType', 'detailDiameter', 'detailAngle', 'detailStepover', 'detailFlutes', 'detailRpm', 'detailFeed', 'detailPlunge',
   'cutoutOn', 'cutoutTabs', 'cutoutTabW', 'cutoutTabH', 'cutoutThrough', 'cutoutDir',
 ] as const satisfies readonly (keyof ReliefParams)[];
 
 /** stock, placement and border: a job setting, kept by Reset all */
 export const LAYOUT_KEYS = [
-  'stockW', 'stockH', 'picX', 'picY', 'outlineShape', 'outlineCorner', 'borderInset', 'borderStyle', 'borderWidth', 'borderHeight', 'borderGap', 'borderPitch',
+  'stockW', 'stockH', 'stockThick', 'partW', 'partH', 'picX', 'picY', 'outlineShape', 'outlineCorner', 'borderInset', 'borderStyle', 'borderWidth', 'borderHeight', 'borderGap', 'borderPitch',
 ] as const satisfies readonly (keyof ReliefParams)[];
 
 /** the settings the relief / lithophane surface depends on, as a cache key */

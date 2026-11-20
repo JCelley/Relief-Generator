@@ -19,16 +19,33 @@ describe('stock and layout', () => {
     expect(zAt(m, 0, 0)).toBeCloseTo(9, 5); // no fading at the edges
   });
 
-  it('places the picture on bigger stock, off centre', () => {
+  it('places the part on bigger stock, off centre, and leaves the board round it uncut', () => {
     const m = toMachiningGrid(pic, P({ stockW: 200, stockH: 100, picX: 30, picY: -10 }));
     expect(m.widthMm).toBe(200);
     expect(m.heightMm).toBe(100);
-    // picture spans x 80..180, y 15..65
+    // part = picture: x 80..180, y 15..65
     expect(zAt(m, 130, 40)).toBeCloseTo(9, 3);
-    expect(zAt(m, 60, 40)).toBeCloseTo(3, 5);
-    expect(zAt(m, 130, 80)).toBeCloseTo(3, 5);
+    expect(zAt(m, 60, 40)).toBeCloseTo(9, 5); // uncut board at the part's top
+    expect(zAt(m, 130, 80)).toBeCloseTo(9, 5);
     // faded to the base at its own edges
     expect(zAt(m, 80.5, 40)).toBeLessThan(5);
+    // thicker stock: the uncut board stands at its full thickness
+    const t = toMachiningGrid(pic, P({ stockW: 200, stockH: 100, stockThick: 19 }));
+    expect(zAt(t, 20, 50)).toBeCloseTo(19, 5);
+    expect(t.zMax).toBeCloseTo(19, 5);
+  });
+
+  it('keeps the part its own size whatever the stock', () => {
+    const p = P({ borderStyle: 'bead', borderWidth: 10, borderGap: 5 });
+    const a = resolveLayout({ ...p, stockW: 300, stockH: 120 }, 100, 50);
+    const b = resolveLayout({ ...p, stockW: 800, stockH: 400 }, 100, 50);
+    expect(a.outline.a).toBeCloseTo(65, 6);
+    expect(b.outline.a).toBeCloseTo(65, 6);
+    expect(b.outline.b).toBeCloseTo(40, 6);
+    const c = resolveLayout({ ...p, partW: 200, partH: 150, picX: 10 }, 100, 50);
+    expect(c.W).toBeCloseTo(200, 6);
+    expect(c.outline.cx).toBeCloseTo(110, 6);
+    expect(c.pic.x0).toBeCloseTo(60, 6); // picture centred in the part
   });
 
   it('sizes the stock to fit the picture, border and gap', () => {
@@ -57,8 +74,10 @@ describe('stock and layout', () => {
 
   it('clips the picture to an oval', () => {
     const m = toMachiningGrid(pic, P({ outlineShape: 'oval', stockW: 120, stockH: 80 }));
+    // oval 100 × 50 in the middle of 120 × 80 stock
     expect(zAt(m, 60, 40)).toBeCloseTo(9, 3);
-    expect(zAt(m, 12, 12)).toBeCloseTo(3, 5); // corner, outside the oval
+    expect(zAt(m, 14, 18)).toBeCloseTo(9, 5); // in the picture's box, outside the oval: uncut
+    expect(zAt(m, 60, 16)).toBeLessThan(5); // just inside the oval: faded down
   });
 
   it('keeps every border profile between 0 and 1', () => {
@@ -97,7 +116,7 @@ describe('stock and layout', () => {
   });
 
   it('starts each side of a rectangle at a corner, so the pattern mirrors at the mitres', () => {
-    const R = resolveLayout(P({ borderStyle: 'pearls', borderWidth: 10, stockW: 160, stockH: 110 }), 100, 50);
+    const R = resolveLayout(P({ borderStyle: 'pearls', borderWidth: 10, partW: 160, partH: 110 }), 100, 50);
     const al = makeAlong(R);
     // centre line of the band runs 5 mm in; its corners are (5, 5), (155, 5), (155, 105), (5, 105)
     const ph = (u: number) => Math.abs(u - Math.round(u));
@@ -156,5 +175,18 @@ describe('setup sheet with a stock layout', () => {
     const roomy = setupSheet({ ...base, cutout: cut, layout: { room: 10, tool: 6.35, shape: 'oval', border: 'Rope' } });
     expect(roomy).not.toContain('runs past its edge');
     expect(roomy).toContain('Rope border');
+  });
+});
+
+describe('finishing round a part on bigger stock', () => {
+  it('leaves out the uncut board but not the part', async () => {
+    const { topSkip } = await import('../src/core/cam');
+    // a picture at half height: 3 mm under the top of the stock
+    const m = toMachiningGrid(makeGrid(200, 100, 0.5), P({ stockW: 200, stockH: 100 }));
+    const ball = { type: 'ball' as const, diameter: 1.5875, angle: 0 };
+    const skip = topSkip(m, ball, Math.max(m.zMax, 0))!;
+    const s = (x: number, y: number) => skip[Math.round(y / m.dy) * m.nx + Math.round(x / m.dx)];
+    expect(s(20, 50)).toBe(1); // board left of the part (part spans x 50..150)
+    expect(s(100, 50)).toBe(0); // the part's surface, below the top: finished
   });
 });

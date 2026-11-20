@@ -70,7 +70,7 @@ export interface Layout {
   H: number;
   /** picture rectangle on the stock */
   pic: { x0: number; y0: number; w: number; h: number };
-  /** plaque outline = outer edge of the border; the cutout follows it */
+  /** part outline = outer edge of the border; the cutout follows it, and outside it the stock is uncut */
   outline: Shape;
   border: BorderStyle;
   /** border width and height */
@@ -84,22 +84,28 @@ export interface Layout {
 export function layoutActive(p: ReliefParams): boolean {
   return (
     p.mode === 'relief' &&
-    (p.borderStyle !== 'none' || p.outlineShape !== 'rect' || p.stockW > 0 || p.stockH > 0 || p.picX !== 0 || p.picY !== 0 || p.borderInset > 0)
+    (p.borderStyle !== 'none' || p.outlineShape !== 'rect' || p.stockW > 0 || p.stockH > 0 || p.partW > 0 || p.partH > 0 || p.picX !== 0 || p.picY !== 0 || p.borderInset > 0)
   );
 }
 
-/** stock, picture placement, outline and border for a picture of picW × picH mm */
+/**
+ * Stock, part and picture for a picture of picW × picH mm. The part (outline + border) is its own
+ * size (or fits the picture plus border and gap) and sits on the stock at its offset; the picture is
+ * centred in the part; the stock is its own size (or fits the part plus the edge margin).
+ */
 export function resolveLayout(p: ReliefParams, picW: number, picH: number): Layout {
   const active = layoutActive(p);
   const border = active && p.borderStyle !== 'none';
   const inset = active ? Math.max(0, p.borderInset) : 0;
   const margin = border ? p.borderWidth + p.borderGap : 0;
-  const W = active && p.stockW > 0 ? p.stockW : picW + 2 * (margin + inset);
-  const H = active && p.stockH > 0 ? p.stockH : picH + 2 * (margin + inset);
+  const PW = active && p.partW > 0 ? p.partW : picW + 2 * margin;
+  const PH = active && p.partH > 0 ? p.partH : picH + 2 * margin;
+  const W = active && p.stockW > 0 ? p.stockW : PW + 2 * inset;
+  const H = active && p.stockH > 0 ? p.stockH : PH + 2 * inset;
   const ox = active ? p.picX : 0, oy = active ? p.picY : 0;
-  const a = Math.max(0.5, W / 2 - inset), b = Math.max(0.5, H / 2 - inset);
+  const a = Math.max(0.5, PW / 2), b = Math.max(0.5, PH / 2);
   const kind = active ? p.outlineShape : 'rect';
-  const outline: Shape = { kind, cx: W / 2, cy: H / 2, a, b, c: kind === 'rounded' ? Math.max(0, Math.min(p.outlineCorner, a, b)) : 0 };
+  const outline: Shape = { kind, cx: W / 2 + ox, cy: H / 2 + oy, a, b, c: kind === 'rounded' ? Math.max(0, Math.min(p.outlineCorner, a, b)) : 0 };
   const inr = Math.min(a, b, kind === 'arch' ? archRise(a, b) : Infinity);
   const bw = border ? Math.max(0.5, Math.min(p.borderWidth, 0.45 * inr)) : 0;
   const pitch = p.borderPitch > 0 ? p.borderPitch : (PITCH[p.borderStyle] ?? 1) * bw;
@@ -107,7 +113,7 @@ export function resolveLayout(p: ReliefParams, picW: number, picH: number): Layo
     active,
     W,
     H,
-    pic: { x0: W / 2 + ox - picW / 2, y0: H / 2 + oy - picH / 2, w: picW, h: picH },
+    pic: { x0: outline.cx - picW / 2, y0: outline.cy - picH / 2, w: picW, h: picH },
     outline,
     border: border ? p.borderStyle : 'none',
     bw,
