@@ -225,6 +225,15 @@ self.onmessage = async (ev: MessageEvent<ComputeRequest>) => {
       last = null;
       return;
     }
+    if (req.type === 'times') {
+      // a worker of its own: take the surface as given, then time each pass without writing it out
+      const p = req.params;
+      last = { key: geometryKey(p) + '|' + (isLamp(p) ? lamp?.ver : photo?.ver), mach: req.mach };
+      const { ops, mach } = camOps(p);
+      const g = { ...gcodeOpts(p, mach, 'mm'), timeOnly: true };
+      post({ type: 'times', id: req.id, ops: ops.map((t) => ({ name: t.name, sec: writeGcode(t, g).seconds })), total: writeGcode(ops, g).seconds });
+      return;
+    }
     if (req.type === 'params') {
       const p = req.params;
       const { mach, ms, iterations } = machFor(p);

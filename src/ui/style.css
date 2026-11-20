@@ -122,3 +122,4 @@ div.cam-note { margin: 2px 0 4px; }
 #layoutCv { display: block; margin: 2px auto 6px; border-radius: 4px; cursor: grab; touch-action: none; outline: none; }
 #layoutCv:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
 #layoutCv.dragging { cursor: grabbing; }
+.op-time { margin-left: 6px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--accent); opacity: 1; font-variant-numeric: tabular-nums; }

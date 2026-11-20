@@ -4,6 +4,7 @@ import { shadeHeightfield } from '../core/shade';
 import type { Grid } from '../core/grid';
 import type { RawInputs } from '../core/relief';
 import type { MaskModelKey, Device } from '../models/infer';
+import type { MachGrid } from '../core/resample';
 import type { ComputeRequest, ComputeResponse, ExportKind, GcodeOp, ModelRequest, ModelResponse, ReliefStats } from '../workers/protocol';
 import { FIELDS, Field, CAM_GROUPS, CamGroup } from './schema';
 import { maskQuality } from '../core/maskQuality';
@@ -69,6 +70,60 @@ let modelWorker = newModelWorker();
 let lastRequest: ModelRequest | null = null;
 const computeWorker = new Worker(new URL('../workers/compute.worker.ts', import.meta.url), { type: 'module' });
 const sendCompute = (m: ComputeRequest, t: Transferable[] = []) => computeWorker.postMessage(m, t);
+
+// ---- run times: a second worker times the G-code passes, so the preview never waits for it ---------
+let timesWorker: Worker | null = null;
+let timesBusy = false;
+let timesId = 0;
+let timesState: 'none' | 'working' | 'done' = 'none';
+const OP_GROUP: Record<string, CamGroup> = { roughing: 'rough', finishing: 'finish', detail: 'detail', cutout: 'cutout' };
+
+function showTimes() {
+  for (const g of ['job', 'rough', 'finish', 'detail', 'cutout'] as CamGroup[]) {
+    const el = document.getElementById(`time_${g}`);
+    if (!el) continue;
+    let text = '';
+    if (timesState === 'working') text = '· estimating…';
+    else if (timesState === 'done' && lastPaths) {
+      if (g === 'job') text = lastPaths.ops.length ? `· about ${fmtTime(lastPaths.total)} in all` : '';
+      else {
+        const o = lastPaths.ops.find((q) => OP_GROUP[q.name] === g);
+        text = o ? `· about ${fmtTime(o.sec)}` : '';
+      }
+    }
+    el.textContent = text;
+  }
+}
+
+/** times the passes for the surface just computed; a newer request cancels one still running */
+function requestTimes(mach: MachGrid, p: ReliefParams) {
+  if (timesBusy && timesWorker) {
+    timesWorker.terminate();
+    timesWorker = null;
+  }
+  if (!timesWorker) {
+    timesWorker = new Worker(new URL('../workers/compute.worker.ts', import.meta.url), { type: 'module' });
+    timesWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
+      const m = ev.data;
+      if (m.type === 'error') {
+        timesBusy = false;
+        timesState = 'none';
+        showTimes();
+        return;
+      }
+      if (m.type !== 'times' || m.id !== timesId) return;
+      timesBusy = false;
+      lastPaths = { ops: m.ops, total: m.total };
+      timesState = 'done';
+      showTimes();
+      updateCamInfo();
+    };
+  }
+  timesBusy = true;
+  timesState = 'working';
+  showTimes();
+  timesWorker.postMessage({ type: 'times', id: ++timesId, params: p, mach } satisfies ComputeRequest, [mach.z.buffer]);
+}
 
 let analyzeId = 0;
 let reliefId = 0;
@@ -138,6 +193,12 @@ function camHost(g: CamGroup): HTMLElement {
       el = document.createElement('div');
       const h = document.createElement('h3');
       h.textContent = CAM_GROUPS[g];
+      // estimated run time of this pass (the whole job on the Job heading)
+      const t = document.createElement('span');
+      t.className = 'op-time';
+      t.id = `time_${g}`;
+      t.title = 'Estimated run time from the feeds, rapids, ramps and spindle spin-up. Real runs take longer on lots of short moves (acceleration): often 10–30 % more.';
+      h.appendChild(t);
       el.appendChild(h);
     }
     el.className = 'cam-group';
@@ -524,9 +585,9 @@ function updateCamInfo() {
   if (params.stockThick > 0 && lastStats && params.stockThick < lastStats.zMax - 1e-3)
     warn.push(`The stock (${fmtLen(params.stockThick)}) is thinner than the part (${fmtLen(lastStats.zMax)}): it is taken as exactly the part height.`);
   if (params.zZero === 'top' && params.stockThick === 0) info.push('Z0 on top of the stock assumes the stock is exactly the part height. Set Stock thickness if your board is thicker.');
-  if (lastPaths && showPaths())
-    info.push(`Estimated time: ${lastPaths.ops.map((o) => `${o.name} ${fmtTime(o.sec)}`).join(', ')}${lastPaths.ops.length > 1 ? `; ${fmtTime(lastPaths.total)} in all, plus tool changes` : ''}.`);
-  else info.push('Tick Toolpaths in the 3D view to see the paths and run times.');
+  if (lastPaths && timesState === 'done')
+    info.push(`Estimated time: ${lastPaths.ops.map((o) => `${o.name} ${fmtTime(o.sec)}`).join(', ')}${lastPaths.ops.length > 1 ? `; ${fmtTime(lastPaths.total)} in all, plus tool changes` : ''}. Real runs take longer on lots of short moves (acceleration), often 10–30 %.`);
+  else if (timesState === 'working') info.push('Working out run times…');
   info.push(`X0 Y0 = front-left corner of the stock; Z0 = ${params.zZero === 'top' ? 'top of the stock' : 'spoilboard'}. Set Z0 again after each tool change.`);
   $('camInfo').textContent = info.join('\n');
   const w = $('camWarn');
@@ -631,6 +692,9 @@ function onParamsChanged() {
   debounce = window.setTimeout(requestRelief, 120);
 }
 
+/** the settings of the relief being computed (the run times go with them) */
+let sentParams: ReliefParams = { ...params };
+
 function requestRelief() {
   if (busy) {
     dirty = true;
@@ -641,7 +705,8 @@ function requestRelief() {
   dirty = false;
   showMaskWarning();
   if (isLamp()) sendLampInputs();
-  sendCompute({ type: 'params', id: ++reliefId, params: { ...params }, view: viewMode(), toolpaths: showPaths() });
+  sentParams = { ...params };
+  sendCompute({ type: 'params', id: ++reliefId, params: sentParams, view: viewMode(), toolpaths: showPaths() });
 }
 
 const showPaths = () => params.mode === 'relief' && ($('showPaths') as HTMLInputElement).checked;
@@ -903,8 +968,23 @@ computeWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
       }
       preview.setHeightfield(shown, m.nx, m.ny, m.stats.widthMm, m.stats.heightMm);
       preview.setReach(m.left && view === 'reach' ? m.left : null);
-      lastPaths = m.paths ? { ops: m.paths.ops.map((o) => ({ name: o.name, sec: o.sec })), total: m.paths.total } : null;
       lastDetailArea = m.stats.detailArea;
+      if (m.paths) {
+        // the toolpaths came with their times
+        if (timesBusy && timesWorker) {
+          timesWorker.terminate();
+          timesWorker = null;
+          timesBusy = false;
+        }
+        lastPaths = { ops: m.paths.ops.map((o) => ({ name: o.name, sec: o.sec })), total: m.paths.total };
+        timesState = 'done';
+        showTimes();
+      } else if (!dirty) {
+        // time the passes for this surface in the background
+        const p = sentParams, s = m.stats;
+        const layout = s.picW && s.picH ? resolveLayout(p, s.picW, s.picH) : undefined;
+        requestTimes({ nx: m.nx, ny: m.ny, dx: s.dx, dy: s.heightMm / (m.ny - 1), widthMm: s.widthMm, heightMm: s.heightMm, z: new Float32Array(m.z), zMin: s.zMin, zMax: s.zMax, layout }, p);
+      }
     }
     // the stock box and origin always show for a relief; the paths when ticked
     const stockTop = Math.max(m.stats.zMax, params.stockThick);

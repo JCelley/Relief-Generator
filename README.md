@@ -41,7 +41,7 @@ Changing the layout or the border doesn't recompute the relief, so it updates in
 
 ### G-code for a 3-axis router
 
-The **G-code** section (CNC relief mode) writes plain G-code that GRBL, Mach3/4, LinuxCNC, UCCNC and most hobby controllers run (G20/G21 follows the inch/mm setting). It is split into groups:
+The **G-code** section (CNC relief mode) writes plain G-code that GRBL, Mach3/4, LinuxCNC, UCCNC and most hobby controllers run (G20/G21 follows the inch/mm setting). It is split into groups, each with its estimated run time next to its heading (the whole job next to Job). The times are worked out in the background after each change, from the feeds, rapids, ramps and spindle spin-up; real runs take longer on lots of short moves (acceleration), often 10–30 %.
 
 - **Job**: **Material** (sets the recommended speeds and feeds), **Z zero** (top of the stock, or the spoilboard) and the **Safe height** for moves across.
 - **Roughing** (optional, T1): Z-level raster with a flat or ball end mill. It takes the material down level by level (**Stepdown**), lines **Stepover** apart, and stops **Leave for finish** above the surface, cutting only where material is left. With a flat end mill, flat floor (the base round the picture and border) is cut to its final depth, and the finishing pass leaves it out: it rapids across instead of feeding over it. Finishing also leaves out uncut board round the part.

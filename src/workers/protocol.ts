@@ -1,3 +1,4 @@
+import type { MachGrid } from '../core/resample';
 import type { Grid } from '../core/grid';
 import type { RawInputs } from '../core/relief';
 import type { ReliefParams } from '../core/params';
@@ -30,7 +31,9 @@ export type ComputeRequest =
   /** photo: the analysed photo (models: false = luminance only, enough for a lithophane); lamp: all lamp pictures side by side */
   | { type: 'inputs'; raw: RawInputs; slot: 'photo' | 'lamp'; models: boolean; panels?: number }
   | { type: 'params'; id: number; params: ReliefParams; view: 'design' | 'cut' | 'reach'; toolpaths?: boolean }
-  | { type: 'export'; id: number; params: ReliefParams; kind: ExportKind; name: string; units?: 'mm' | 'in'; op?: GcodeOp };
+  | { type: 'export'; id: number; params: ReliefParams; kind: ExportKind; name: string; units?: 'mm' | 'in'; op?: GcodeOp }
+  /** run times of each G-code pass for this surface (sent to a second worker so it never holds up the preview) */
+  | { type: 'times'; id: number; params: ReliefParams; mach: MachGrid };
 
 /** toolpaths for the 3D view: line segments in part coordinates, and estimated run times (s) */
 export interface PreviewPaths {
@@ -79,4 +82,5 @@ export type ComputeResponse =
   | { type: 'relief'; id: number; z: Float32Array; nx: number; ny: number; stats: ReliefStats; left?: Float32Array; mesh?: PreviewMesh; paths?: PreviewPaths }
   | { type: 'exported'; id: number; kind: ExportKind; bytes: Uint8Array; info: string }
   | { type: 'progress'; id: number; message: string }
+  | { type: 'times'; id: number; ops: { name: string; sec: number }[]; total: number }
   | { type: 'error'; id: number; message: string };

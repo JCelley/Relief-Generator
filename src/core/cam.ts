@@ -748,6 +748,8 @@ export interface GcodeOpts {
   spindleDelay?: number;
   /** between tools in one file: T# M6 (Mach3/4, LinuxCNC, UCCNC, gSender, UGS) or an M0 pause */
   toolChange?: 'm6' | 'm0';
+  /** only work out the times (no text): fast, for showing estimates */
+  timeOnly?: boolean;
 }
 
 export const toolLabel = (t: Cutter, fmt: (mm: number) => string): string =>
@@ -805,6 +807,15 @@ export function writeGcode(input: Toolpath | Toolpath[], o: GcodeOpts): GcodeRes
   let cutLen = 0, plungeLen = 0, rapidLen = 0, time = 0;
   let tp = ops[0];
   const move = (g: 'G0' | 'G1', x: number, y: number, z: number, f?: number) => {
+    if (o.timeOnly) {
+      const d = Math.hypot(x - cur.x, y - cur.y, z - cur.z);
+      if (d < 1e-6) return;
+      if (g === 'G0') time += d / 5000;
+      else time += d / (f ?? tp.feed);
+      mode = g;
+      cur = { x, y, z };
+      return;
+    }
     const parts: string[] = [];
     if (g !== mode) parts.push(g);
     if (Math.abs(x - cur.x) > 1e-6) parts.push(`X${n(x)}`);

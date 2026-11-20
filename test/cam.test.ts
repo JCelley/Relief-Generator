@@ -393,3 +393,20 @@ describe('flat floor', () => {
     expect(res.seconds).toBeLessThan(0.85 * full.seconds);
   });
 });
+
+describe('run time estimates', () => {
+  it('times without writing the file, exactly as the written file', () => {
+    const ball = { type: 'ball' as const, diameter: 1.5875, angle: 0 }, flat = { type: 'flat' as const, diameter: 6.35, angle: 0 };
+    const r = roughingPaths(g, { tool: flat, stepdown: 2, stepover: 2.5, allowance: 0.5, stockTop: 8 });
+    const ops = [
+      { name: 'roughing', number: 1, tool: flat, rpm: 12000, feed: 2500, plunge: 800, ...r },
+      { name: 'finishing', number: 2, tool: ball, rpm: 18000, feed: 1000, plunge: 300, paths: finishingPaths(g, { tool: ball, stepover: 0.5, dir: 'xy' }) },
+    ];
+    const o = { units: 'mm' as const, safeZ: 5, zZero: 'top' as const, stockTop: 8, rampAngle: 5, spindleDelay: 3 };
+    for (const sel of [ops[0], ops[1], ops]) {
+      const full = writeGcode(sel, o), fast = writeGcode(sel, { ...o, timeOnly: true });
+      expect(fast.seconds).toBeCloseTo(full.seconds, 6);
+      expect(fast.seconds).toBeGreaterThan(0);
+    }
+  });
+});
