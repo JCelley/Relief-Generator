@@ -9,9 +9,11 @@ import { simulateCut, CutResult } from '../core/cutter';
 import { meshTo3mf, heightmapPng } from '../core/files';
 import { geometryKey, CAM_KEYS, type ReliefParams } from '../core/params';
 import type { ComputeRequest, ComputeResponse, PreviewPaths } from './protocol';
-import { finishingPaths, roughingPaths, detailRegion, detailPaths, cutoutPath, writeGcode, previewSegments, chipRatio, type Toolpath, type GcodeOpts } from '../core/cam';
+import { finishingPaths, finishingRuns, floorSkip, roughRest, toolRadiusAt, roughingPaths, detailRegion, detailPaths, cutoutPath, writeGcode, previewSegments, chipRatio, type Toolpath, type GcodeOpts } from '../core/cam';
 import type { Cutter } from '../core/cutter';
 import { setupSheet } from '../core/setup';
+import { outlineLoop, BORDER_STYLES } from '../core/layout';
+import type { Grid } from '../core/grid';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -19,6 +21,12 @@ let photo: { raw: RawInputs; models: boolean; ver: number } | null = null;
 let lamp: { raw: RawInputs; panels: number; ver: number } | null = null;
 let ver = 0;
 let prep: Prepared | null = null;
+/** the relief itself (slow); placing it on the stock and the border are worked out from it quickly */
+let rel: { key: string; height: Grid; iterations?: number } | null = null;
+const RELIEF_KEYS = [
+  'method', 'compression', 'detailGain', 'baseScale', 'baseGamma', 'gradThreshold', 'textureGain', 'toneDepth', 'toneScale', 'toneDarkUp',
+  'reliefHeight', 'falloffWidth', 'bgMode', 'bgLevel', 'maskThreshold', 'maskCleanup', 'widthMm', 'guideEps',
+] as const satisfies readonly (keyof ReliefParams)[];
 /** the current surface and what was worked out from it: cutter simulation, detail region, toolpaths */
 let last: {
   key: string;
@@ -63,10 +71,16 @@ function machFor(p: ReliefParams): { mach: MachGrid; ms: number; iterations?: nu
     return { mach, ms: performance.now() - t0 };
   }
   const pr = getPrepared(p);
-  const r = computeRelief(pr, p);
-  const mach = toMachiningGrid(r.height, p);
+  const rk = JSON.stringify(RELIEF_KEYS.map((k) => p[k])) + '|' + photo!.ver;
+  let iterations: number | undefined;
+  if (!rel || rel.key !== rk) {
+    const r = computeRelief(pr, p);
+    rel = { key: rk, height: r.height };
+    iterations = r.iterations;
+  }
+  const mach = toMachiningGrid(rel.height, p);
   last = { key, mach };
-  return { mach, ms: performance.now() - t0, iterations: r.iterations };
+  return { mach, ms: performance.now() - t0, iterations };
 }
 
 const finishTool = (p: ReliefParams): Cutter => ({ type: p.toolType, diameter: p.toolDiameter, angle: p.toolAngle });
@@ -123,29 +137,41 @@ function camOps(p: ReliefParams): { ops: Toolpath[]; mach: MachGrid } {
     const r = roughingPaths(mach, { tool: roughTool(p), stepdown: p.roughStepdown, stepover: Math.max(0.05, p.roughStepover), allowance: p.roughAllowance, stockTop: st });
     ops.push({ name: 'roughing', number: 1, tool: roughTool(p), rpm: p.roughRpm, feed: p.roughFeed, plunge: p.roughPlunge, ...r });
   }
-  const fp = finishingPaths(mach, { tool: finishTool(p), stepover: Math.max(0.01, p.finStepover), dir: p.finDir });
-  ops.push({
-    name: 'finishing',
-    number: 2,
-    tool: finishTool(p),
-    rpm: p.finRpm,
-    feed: p.finFeed,
-    plunge: p.finPlunge,
-    paths: fp,
-    // after roughing the material is at most the allowance plus one roughing step above the surface;
-    // a second (cross-hatch) pass goes over a surface that is already finished
-    entry: fp.map((q, i) => (i > 0 ? q[2] + 0.2 : p.roughOn ? Math.min(st, q[2] + p.roughAllowance + p.roughStepdown) : st)),
-  });
+  const fin = { tool: finishTool(p), stepover: Math.max(0.01, p.finStepover), dir: p.finDir };
+  // flat floor the roughing end mill already cut to depth is left out of the finishing pass
+  const skip = p.roughOn ? floorSkip(mach, roughTool(p), finishTool(p), Math.max(0.05, p.roughStepover)) : null;
+  const finOp = { name: 'finishing', number: 2, tool: finishTool(p), rpm: p.finRpm, feed: p.finFeed, plunge: p.finPlunge };
+  if (skip) {
+    const rest = roughRest(mach, roughTool(p), p.roughAllowance, Math.max(0.05, p.roughStepover), toolRadiusAt(finishTool(p), 2));
+    ops.push({ ...finOp, ...finishingRuns(mach, { ...fin, skip, rest, stockTop: st }) });
+  }
+  else {
+    const fp = finishingPaths(mach, fin);
+    ops.push({
+      ...finOp,
+      paths: fp,
+      // after roughing the material is at most the allowance plus one roughing step above the surface;
+      // a second (cross-hatch) pass goes over a surface that is already finished
+      entry: fp.map((q, i) => (i > 0 ? q[2] + 0.2 : p.roughOn ? Math.min(st, q[2] + p.roughAllowance + p.roughStepdown) : st)),
+    });
+  }
   if (p.detailOn) {
     const d = detailFor(p);
     const r = detailPaths(mach, { tool: detailTool(p), stepover: Math.max(0.01, p.detailStepover), dir: p.finDir, finishCut: finishCutFor(p).cut, region: d.region });
     ops.push({ name: 'detail', number: 3, tool: detailTool(p), rpm: p.detailRpm, feed: p.detailFeed, plunge: p.detailPlunge, ...r });
   }
   if (p.cutoutOn) {
+    // round the plaque outline (the stock edge unless a shape or inset is set)
+    const o = mach.layout?.outline;
+    const curved = o && (o.kind === 'oval' || o.kind === 'arch');
     const path = cutoutPath({
       tool: roughTool(p),
-      widthMm: mach.widthMm,
-      heightMm: mach.heightMm,
+      widthMm: o ? 2 * o.a : mach.widthMm,
+      heightMm: o ? 2 * o.b : mach.heightMm,
+      x0: o ? o.cx - o.a : 0,
+      y0: o ? o.cy - o.b : 0,
+      corner: o?.c ?? 0,
+      loop: curved ? outlineLoop(o, roughTool(p).diameter / 2) : undefined,
       stockTop: st,
       stepdown: p.roughStepdown,
       through: p.cutoutThrough,
@@ -171,7 +197,7 @@ function gcodeOpts(p: ReliefParams, mach: MachGrid, units: 'mm' | 'in'): GcodeOp
     spindleDelay: p.spindleDelay,
     toolChange: p.toolChange,
     notes: [
-      `Part ${mach.widthMm.toFixed(2)} x ${mach.heightMm.toFixed(2)} mm, ${mach.zMax.toFixed(2)} mm tall (base ${p.baseThickness.toFixed(2)} mm); stock ${st.toFixed(2)} mm thick`,
+      `Stock ${mach.widthMm.toFixed(2)} x ${mach.heightMm.toFixed(2)} x ${st.toFixed(2)} mm; part ${mach.zMax.toFixed(2)} mm tall (base ${p.baseThickness.toFixed(2)} mm)`,
       'Check speeds, feeds and the toolpath before running. Air-cut first if unsure.',
     ],
   };
@@ -190,6 +216,7 @@ self.onmessage = async (ev: MessageEvent<ComputeRequest>) => {
       else {
         photo = { raw: req.raw, models: req.models, ver: ++ver };
         prep = null;
+        rel = null;
       }
       last = null;
       return;
@@ -199,7 +226,7 @@ self.onmessage = async (ev: MessageEvent<ComputeRequest>) => {
       const { mach, ms, iterations } = machFor(p);
       const z = new Float32Array(mach.z);
       const transfer: Transferable[] = [z.buffer];
-      const stats = { widthMm: mach.widthMm, heightMm: mach.heightMm, zMin: mach.zMin, zMax: mach.zMax, nx: mach.nx, ny: mach.ny, dx: mach.dx, ms, iterations } as Extract<ComputeResponse, { type: 'relief' }>['stats'];
+      const stats = { picW: mach.layout?.pic.w, picH: mach.layout?.pic.h, widthMm: mach.widthMm, heightMm: mach.heightMm, zMin: mach.zMin, zMax: mach.zMax, nx: mach.nx, ny: mach.ny, dx: mach.dx, ms, iterations } as Extract<ComputeResponse, { type: 'relief' }>['stats'];
       let left: Float32Array | undefined;
       let mesh: Extract<ComputeResponse, { type: 'relief' }>['mesh'];
       if (p.mode === 'relief' && req.view !== 'design') {
@@ -275,6 +302,14 @@ self.onmessage = async (ev: MessageEvent<ComputeRequest>) => {
             safeZ: p.safeZ,
             toolChange: p.toolChange,
             cutout: p.cutoutOn ? { tabs: p.cutoutTabs, tabW: p.cutoutTabW, tabH: p.cutoutTabH, through: p.cutoutThrough } : null,
+            layout: mach.layout?.active
+              ? {
+                  room: Math.min(mach.layout.outline.cx - mach.layout.outline.a, mach.layout.outline.cy - mach.layout.outline.b),
+                  tool: p.roughDiameter,
+                  shape: { rect: 'rectangle', rounded: 'rounded rectangle', oval: 'oval', arch: 'arched top' }[mach.layout.outline.kind],
+                  border: BORDER_STYLES.find(([v]) => v === mach.layout!.border)?.[1] ?? 'None',
+                }
+              : undefined,
             ops: ops.map((t) => {
               const r = writeGcode(t, g);
               const rough = t.name === 'roughing' || t.name === 'cutout';

@@ -55,6 +55,9 @@ export interface PreviewMesh {
 }
 
 export interface ReliefStats {
+  /** relief: the picture's own size on the stock (widthMm × heightMm is the stock) */
+  picW?: number;
+  picH?: number;
   widthMm: number;
   heightMm: number;
   zMin: number;

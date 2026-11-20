@@ -1,4 +1,5 @@
 import type { ReliefParams } from '../core/params';
+import { BORDER_STYLES } from '../core/layout';
 
 export type Field =
   | {
@@ -17,11 +18,13 @@ export type Field =
       rate?: boolean;
       cam?: boolean;
       group?: CamGroup;
+      /** in the Stock & border section */
+      stock?: boolean;
       /** common values offered in the number box's drop-down (mm for lengths) */
       presets?: [number, string][];
     }
-  | { key: keyof ReliefParams; label: string; kind: 'select'; options: [string, string][]; advanced?: boolean; litho?: boolean; cam?: boolean; group?: CamGroup; help?: string }
-  | { key: keyof ReliefParams; label: string; kind: 'check'; advanced?: boolean; litho?: boolean; cam?: boolean; group?: CamGroup; help?: string };
+  | { key: keyof ReliefParams; label: string; kind: 'select'; options: [string, string, string?][]; advanced?: boolean; litho?: boolean; cam?: boolean; group?: CamGroup; stock?: boolean; help?: string }
+  | { key: keyof ReliefParams; label: string; kind: 'check'; advanced?: boolean; litho?: boolean; cam?: boolean; group?: CamGroup; stock?: boolean; help?: string };
 
 /** sub-sections of the G-code section */
 export type CamGroup = 'job' | 'rough' | 'finish' | 'detail' | 'cutout' | 'machine';
@@ -160,6 +163,40 @@ export const FIELDS: Field[] = [
   },
   { key: 'toneDarkUp', label: 'Raise dark areas', kind: 'check', help: 'Tone carving: raise dark areas instead of cutting them in.' },
 
+  // stock & border (CNC relief)
+  { key: 'stockW', label: 'Width (X)', kind: 'range', min: 0, max: 1250, step: 0.5, unit: 'mm', length: true, stock: true, presets: [[0, 'fit the picture'], [88.9, '3.5" (1×4 board)'], [139.7, '5.5" (1×6)'], [184.15, '7.25" (1×8)'], [203.2, '8"'], [234.95, '9.25" (1×10)'], [254, '10"'], [285.75, '11.25" (1×12)'], [304.8, '12"'], [355.6, '14"'], [406.4, '16"'], [457.2, '18"'], [609.6, '24"']], help: 'Width of the board along X. 0 = just big enough for the picture (plus the border and gap). Drop-down: common sizes, including the real widths of 1× boards.' },
+  { key: 'stockH', label: 'Height (Y)', kind: 'range', min: 0, max: 1250, step: 0.5, unit: 'mm', length: true, stock: true, presets: [[0, 'fit the picture'], [88.9, '3.5" (1×4 board)'], [139.7, '5.5" (1×6)'], [184.15, '7.25" (1×8)'], [203.2, '8"'], [234.95, '9.25" (1×10)'], [254, '10"'], [285.75, '11.25" (1×12)'], [304.8, '12"'], [355.6, '14"'], [406.4, '16"'], [457.2, '18"'], [609.6, '24"']], help: 'Height of the board along Y (front to back on the machine). 0 = just big enough for the picture (plus the border and gap).' },
+  { key: 'stockThick', label: 'Thickness', kind: 'range', min: 0, max: 100, step: 0.1, unit: 'mm', length: true, stock: true, help: 'Thickness of the board you are cutting from. 0 = exactly the part height (base + relief). Thicker stock: the roughing pass faces the extra off first.' },
+  {
+    key: 'outlineShape',
+    label: 'Shape',
+    kind: 'select',
+    options: [
+      ['rect', 'Rectangle'],
+      ['rounded', 'Rounded corners'],
+      ['oval', 'Oval / circle'],
+      ['arch', 'Arched top'],
+    ],
+    stock: true,
+    help: 'Outline of the plaque. The border runs round it, the picture fades out inside it, and the cutout follows it. For a circle, make the stock square.',
+  },
+  { key: 'outlineCorner', label: 'Corner radius', kind: 'range', min: 0, max: 150, step: 0.5, unit: 'mm', length: true, stock: true, help: 'Radius of the rounded corners. With a patterned border, at least half the border width keeps the pattern flowing round the corners.' },
+  { key: 'borderInset', label: 'Edge margin', kind: 'range', min: 0, max: 100, step: 0.5, unit: 'mm', length: true, stock: true, help: 'Flat space between the edge of the board and the outline. 0 = the outline touches the board edge. Gives room for clamps or screws, or a plain edge round a cut-out plaque.' },
+  { key: 'picX', label: 'Picture X', kind: 'range', min: -600, max: 600, step: 0.5, unit: 'mm', length: true, stock: true, help: 'Moves the picture right (+) or left (−) from the centre of the stock. Or drag it in the layout above (arrow keys nudge it with the layout selected; Shift for bigger steps).' },
+  { key: 'picY', label: 'Picture Y', kind: 'range', min: -600, max: 600, step: 0.5, unit: 'mm', length: true, stock: true, help: 'Moves the picture up (+) or down (−) from the centre of the stock. Or drag it in the layout above.' },
+  {
+    key: 'borderStyle',
+    label: 'Border',
+    kind: 'select',
+    options: BORDER_STYLES.map(([v, t, g]) => [v, t, g || undefined]),
+    stock: true,
+    help: 'Moulding profile or carved pattern round the plaque. Basic: profiles like a router bit or picture frame. Decorative: patterns that repeat along the border, fitted so they meet without a seam (on a rectangle they mirror at the corners, like mitred moulding).',
+  },
+  { key: 'borderWidth', label: 'Border width', kind: 'range', min: 2, max: 80, step: 0.5, unit: 'mm', length: true, stock: true, presets: [[6.35, '1/4"'], [9.525, '3/8"'], [12.7, '1/2"'], [19.05, '3/4"'], [25.4, '1"'], [38.1, '1 1/2"']], help: 'Width of the border band, measured in from the outline.' },
+  { key: 'borderHeight', label: 'Border height', kind: 'range', min: 0.5, max: 30, step: 0.1, unit: 'mm', length: true, stock: true, help: 'How high the border stands above the base (with Intaglio: how deep it is cut in). It can be taller than the relief: the part gets taller to suit.' },
+  { key: 'borderGap', label: 'Gap to picture', kind: 'range', min: 0, max: 50, step: 0.5, unit: 'mm', length: true, stock: true, help: 'Flat space between the inside of the border and the picture; the picture fades out before it. With the stock size at 0 (fit), the stock grows to make room.' },
+  { key: 'borderPitch', label: 'Pattern size', kind: 'range', min: 0, max: 80, step: 0.5, unit: 'mm', length: true, stock: true, help: 'Length of one repeat of a decorative pattern (one strand of rope, one pearl, one block). 0 = auto, sized to the border width. It is adjusted a little so a whole number of repeats fits.' },
+
   // G-code (cam: true → the G-code section, in groups)
   {
     key: 'camMaterial',
@@ -176,7 +213,6 @@ export const FIELDS: Field[] = [
     group: 'job',
     help: 'Sets the recommended speeds and feeds (Use recommended).',
   },
-  { key: 'stockThick', label: 'Stock thickness', kind: 'range', min: 0, max: 100, step: 0.1, unit: 'mm', length: true, cam: true, group: 'job', help: 'Thickness of the board you are cutting from. 0 = exactly the part height (base + relief). Thicker stock: the roughing pass faces the extra off first.' },
   {
     key: 'zZero',
     label: 'Z zero',

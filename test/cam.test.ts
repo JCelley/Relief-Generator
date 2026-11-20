@@ -13,6 +13,9 @@ import {
   detailPaths,
   chipRatio,
   toolRadiusAt,
+  floorSkip,
+  finishingRuns,
+  roughRest,
 } from '../src/core/cam';
 import { tipHeight, simulateCut } from '../src/core/cutter';
 import type { MachGrid } from '../src/core/resample';
@@ -82,16 +85,29 @@ describe('roughing', () => {
   const { paths, entry } = roughingPaths(g, { tool, stepdown: 2, stepover: 2.5, allowance: 0.5, stockTop: 8 });
   const tip = tipHeight(g, tool);
 
-  it('stays clear of the design by the allowance, never deeper than one stepdown per level', () => {
+  it('stays clear of the design by the allowance (except on the flat floor), never deeper than one stepdown per level', () => {
     expect(paths.length).toBeGreaterThan(0);
     const levels = new Set<number>();
+    let onFloor = 0;
     for (const p of paths)
       for (let k = 0; k < p.length; k += 3) {
-        expect(p[k + 2]).toBeGreaterThanOrEqual(at(tip, p[k], p[k + 1]) + 0.5 - 1e-3);
+        const t = at(tip, p[k], p[k + 1]);
+        // the flat end mill takes the flat floor (3 mm) to its final depth
+        expect(p[k + 2]).toBeGreaterThanOrEqual(t + (t > 3 + 1e-4 ? 0.5 : 0) - 1e-3);
+        if (Math.abs(p[k + 2] - 3) < 1e-4) onFloor++;
         levels.add(Math.round(Math.min(...Array.from({ length: p.length / 3 }, (_, i) => p[i * 3 + 2])) * 1000));
       }
-    // 8 → 6 → 4 → 3.5 (base + allowance)
-    expect([...levels].sort((a, b) => b - a)).toEqual([6000, 4000, 3500]);
+    expect(onFloor).toBeGreaterThan(10);
+    // 8 → 6 → 4 → 3 (the floor; base + allowance next to the dome)
+    expect([...levels].sort((a, b) => b - a)[0]).toBe(6000);
+    expect(Math.min(...levels)).toBe(3000);
+    expect([...levels].every((v) => [6000, 4000, 3500, 3000].includes(v))).toBe(true);
+  });
+
+  it('a ball end mill leaves the allowance on the floor too', () => {
+    const ball = { type: 'ball' as const, diameter: 6.35, angle: 0 };
+    const r = roughingPaths(g, { tool: ball, stepdown: 2, stepover: 2.5, allowance: 0.5, stockTop: 8 });
+    for (const p of r.paths) for (let k = 2; k < p.length; k += 3) expect(p[k]).toBeGreaterThanOrEqual(3.5 - 1e-3);
   });
 
   it('enters each run from the level above', () => {
@@ -298,5 +314,82 @@ describe('feeds and stepover', () => {
     expect(scallopHeight(ball, 0.3175)).toBeCloseTo(1.5875 - Math.sqrt(1.5875 ** 2 - 0.15875 ** 2), 5);
     const v = { type: 'vbit' as const, diameter: 0, angle: 60 };
     expect(scallopHeight(v, stepoverFor(v))).toBeCloseTo(0.02, 3);
+  });
+});
+
+describe('flat floor', () => {
+  const rough = { type: 'flat' as const, diameter: 6.35, angle: 0 };
+  const ball = { type: 'ball' as const, diameter: 1.5875, angle: 0 };
+  const skip = floorSkip(g, rough, ball, 2.5)!;
+  const tipB = tipHeight(g, ball);
+
+  it('leaves out only floor well away from the dome', () => {
+    expect(skip).not.toBeNull();
+    let n = 0;
+    for (let j = 0; j < ny; j++)
+      for (let i = 0; i < nx; i++)
+        if (skip[j * nx + i]) {
+          n++;
+          // dome radius 12 + roughing tool radius + half a roughing stepover + margin
+          expect(Math.hypot(i * dx - 20, j * dx - 15)).toBeGreaterThan(12 + 3.175 + 1.25 + 0.5 - 0.3);
+        }
+    expect(n).toBeGreaterThan(100);
+    expect(floorSkip(g, { ...rough, type: 'ball' }, ball, 2.5)).toBeNull();
+  });
+
+  it('finishes everything else without gouging, rapids across over the material, and saves time', () => {
+    // the material the roughing paths really leave: the flat end mill swept along them
+    const rp = roughingPaths(g, { tool: rough, stepdown: 2, stepover: 2.5, allowance: 0.5, stockTop: 8 });
+    const mat = new Float32Array(nx * ny).fill(8);
+    const R = 3.175, ri = Math.ceil(R / dx);
+    const sweep = (x: number, y: number, zc: number) => {
+      const ci = Math.round(x / dx), cj = Math.round(y / dx);
+      for (let j = Math.max(0, cj - ri); j <= Math.min(ny - 1, cj + ri); j++)
+        for (let i = Math.max(0, ci - ri); i <= Math.min(nx - 1, ci + ri); i++)
+          if (Math.hypot(i * dx - x, j * dx - y) <= R) mat[j * nx + i] = Math.min(mat[j * nx + i], zc);
+    };
+    for (const p of rp.paths)
+      for (let k = 0; k + 3 < p.length; k += 3) {
+        const n = Math.max(1, Math.ceil(Math.hypot(p[k + 3] - p[k], p[k + 4] - p[k + 1]) / 0.1));
+        for (let q = 0; q <= n; q++) sweep(p[k] + ((p[k + 3] - p[k]) * q) / n, p[k + 1] + ((p[k + 4] - p[k + 1]) * q) / n, Math.max(p[k + 2], p[k + 5]));
+      }
+    // what the ball meets: the highest material within its radius
+    const rb = Math.ceil(0.8 / dx), meets = new Float32Array(nx * ny);
+    for (let j = 0; j < ny; j++)
+      for (let i = 0; i < nx; i++) {
+        let m = -Infinity;
+        for (let jj = Math.max(0, j - rb); jj <= Math.min(ny - 1, j + rb); jj++)
+          for (let ii = Math.max(0, i - rb); ii <= Math.min(nx - 1, i + rb); ii++) m = Math.max(m, mat[jj * nx + ii]);
+        meets[j * nx + i] = m;
+      }
+    const rest = roughRest(g, rough, 0.5, 2.5, toolRadiusAt(ball, 2));
+    let worst = -Infinity;
+    for (let k = 0; k < rest.length; k++) worst = Math.max(worst, meets[k] - rest[k]);
+    expect(worst).toBeLessThanOrEqual(1e-3); // the estimate is never below the real material
+
+    const r = finishingRuns(g, { tool: ball, stepover: 0.5, dir: 'x', skip, rest, stockTop: 8 });
+    expect(r.paths.length).toBeGreaterThan(30);
+    // riding on the tool height interpolated between the grid lines either side
+    const lo = (x: number, y: number) => Math.min(tipB[Math.floor(y / dx) * nx + Math.round(x / dx)], tipB[Math.min(ny - 1, Math.ceil(y / dx)) * nx + Math.round(x / dx)], tipB[Math.round(y / dx) * nx + Math.floor(x / dx)], tipB[Math.round(y / dx) * nx + Math.min(nx - 1, Math.ceil(x / dx))]);
+    for (const p of r.paths) for (let k = 0; k < p.length; k += 3) expect(p[k + 2]).toBeGreaterThanOrEqual(lo(p[k], p[k + 1]) - 1e-3);
+    // the line through the middle of the dome is covered across the whole dome
+    const mid = r.paths.filter((p) => Math.abs(p[1] - 15) < 0.26 && Math.abs(p[4] - 15) < 0.26);
+    expect(mid.some((p) => Math.min(p[0], p[p.length - 3]) <= 8 && Math.max(p[0], p[p.length - 3]) >= 32)).toBe(true);
+    const tp = { name: 'finishing', number: 2, tool: ball, rpm: 18000, feed: 1000, plunge: 300 };
+    const res = writeGcode({ ...tp, ...r }, { units: 'mm', safeZ: 5, zZero: 'bottom', stockTop: 8 });
+    // rapids never meet the material roughing left (the finishing pass only lowers it further)
+    const mv = replay(res.text, 0);
+    for (let k = 1; k < mv.length; k++) {
+      if (!mv[k][3]) continue;
+      const [x0, y0, z0] = mv[k - 1], [x1, y1, z1] = mv[k];
+      if (x0 === x1 && y0 === y1 && z1 >= z0) continue; // straight up from where it just cut
+      for (let t = 0; t <= 1; t += 0.05) {
+        const x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * t;
+        if (x < 0 || y < 0 || x > 40 || y > 30) continue;
+        expect(z0 + (z1 - z0) * t).toBeGreaterThanOrEqual(at(meets, x, y) - 1e-3);
+      }
+    }
+    const full = writeGcode({ ...tp, paths: finishingPaths(g, { tool: ball, stepover: 0.5, dir: 'x' }) }, { units: 'mm', safeZ: 5, zZero: 'bottom', stockTop: 8 });
+    expect(res.seconds).toBeLessThan(0.85 * full.seconds);
   });
 });

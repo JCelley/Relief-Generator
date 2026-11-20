@@ -58,12 +58,12 @@
               <option value="mm">mm</option>
             </select>
           </div>
-          <div class="row" title="Finished width of the part (lamp shade: worked out from the diameter). The height follows the photo's proportions.">
-            <label for="width">Width</label>
+          <div class="row" title="Width of the picture (the carving itself; for a lithophane, the whole part). The height follows the photo's proportions. For a CNC relief, the board size and a border are set under Stock &amp; border.">
+            <label for="width" id="widthLabel">Width</label>
             <input type="number" id="width" step="0.01" min="0.1" />
           </div>
-          <div class="row" title="Follows from the width and the photo's proportions. Crop the photo to change it.">
-            <label>Height</label>
+          <div class="row" title="Height of the picture: follows from the width and the photo's proportions. Crop the photo to change it.">
+            <label id="heightLabel">Height</label>
             <output id="heightOut">–</output>
           </div>
         </section>
@@ -127,6 +127,23 @@
               <span class="preset-mod"><button type="button" class="small" id="saveSettings" title="Download every setting as a .json file">Save…</button> <label class="small-btn" title="Read settings back from a saved .json file">Load…<input type="file" id="settingsFile" accept=".json,application/json" hidden /></label></span>
             </div>
           </details>
+        </section>
+
+        <section id="stockSection">
+          <h2>Stock &amp; border</h2>
+          <div class="layout-wrap">
+            <canvas id="layoutCv" tabindex="0" hidden title="Top view of the stock (front edge at the bottom). Drag the picture to move it; it snaps to the centre lines. With the layout selected, arrow keys nudge it (Shift: 10× more)."></canvas>
+          </div>
+          <div class="row">
+            <span>Picture</span>
+            <span class="preset-mod">
+              <button type="button" class="small" id="picCentre" title="Put the picture in the middle of the stock">Centre</button>
+              <button type="button" class="small" id="picFit" title="Size the picture to fit inside the border (or the outline) on the stock size you set, and centre it">Fit</button>
+              <button type="button" class="small" id="picFill" title="Size the picture to fill the space inside the border on the stock size you set, and centre it; what hangs over fades out at the border (an oval vignette, for example)">Fill</button>
+            </span>
+          </div>
+          <div id="stock"></div>
+          <div id="stockInfo" class="status"></div>
         </section>
 
         <section id="camSection">

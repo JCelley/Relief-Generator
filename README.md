@@ -22,15 +22,31 @@ Every slider has a box next to it for typing an exact value (lengths in the curr
    - **STL**: watertight mesh straight from the grid.
    - **Height map**: 16-bit greyscale PNG (black = lowest, white = highest, one pixel per grid point) for Vectric Aspire, Carveco or laser software. The export info gives the Z range to enter there.
 
+### Stock & border (CNC relief)
+
+The **Stock & border** section lays the picture out on the board you are cutting from, with a top view you can drag the picture around in (it snaps to the centre lines; with the view selected, arrow keys nudge it, Shift for 10×).
+
+- **Width (X) / Height (Y)**: the board size (drop-down: common sizes, including the real widths of 1× boards). 0 = just big enough for the picture, plus the border and gap. **Thickness**: the board thickness (Z0 and roughing use it).
+- **Shape**: rectangle, rounded corners, oval / circle (square stock for a circle) or arched top. The picture fades out inside it and the cutout follows it, so an oval plaque comes out oval. **Edge margin** keeps a plain strip between the board edge and the shape.
+- **Picture X / Y**: where the picture's centre sits relative to the middle of the board. **Centre**, **Fit** (as big as fits inside the border) and **Fill** (fills the space inside the border; what hangs over fades out, for an oval vignette) need a board size set.
+- **Border**, from a library:
+  - Basic profiles, like a router bit or picture frame: flat band, bead, cove, bevel, ogee, bead & cove, stepped, reeded, flat with a V-groove.
+  - Decorative patterns that repeat along it: rope, pearls, dentil blocks, scalloped, egg & dart, Greek key, fluted.
+  - Patterns fit a whole number of times so they meet without a seam; on a rectangle each side starts at a corner and the pattern mirrors at the mitre, like a carved frame.
+  - **Border width**, **Border height** (it may be taller than the relief), **Gap to picture** and **Pattern size** (0 = sized to the border).
+  - With Intaglio the border is cut in.
+
+Changing the layout or the border doesn't recompute the relief, so it updates in a fraction of a second.
+
 ### G-code for a 3-axis router
 
 The **G-code** section (CNC relief mode) writes plain G-code that GRBL, Mach3/4, LinuxCNC, UCCNC and most hobby controllers run (G20/G21 follows the inch/mm setting). It is split into groups:
 
-- **Job**: **Material** (sets the recommended speeds and feeds), **Stock thickness** (0 = exactly the part height; thicker stock is faced off by the roughing pass first), **Z zero** (top of the stock, or the spoilboard) and the **Safe height** for moves across.
-- **Roughing** (optional, T1): Z-level raster with a flat or ball end mill. It takes the material down level by level (**Stepdown**), lines **Stepover** apart, and stops **Leave for finish** above the surface, cutting only where material is left.
+- **Job**: **Material** (sets the recommended speeds and feeds), **Z zero** (top of the stock, or the spoilboard) and the **Safe height** for moves across.
+- **Roughing** (optional, T1): Z-level raster with a flat or ball end mill. It takes the material down level by level (**Stepdown**), lines **Stepover** apart, and stops **Leave for finish** above the surface, cutting only where material is left. With a flat end mill, flat floor (the base round the picture and border) is cut to its final depth, and the finishing pass leaves it out: it rapids across instead of feeding over it.
 - **Finishing** (T2): zig-zag raster with the **Finishing tool** from the Relief section (ball, tapered ball, V-bit or flat), along X, Y or both (cross-hatch). The tool rides on the surface without gouging, using the same tool shape as the "As cut" view. The info shows the ridge height the stepover leaves and the recommended stepover (10 % of the ball / tip Ø, or a 0.004 mm ridge for tiny tips).
 - **Detail (rest machining)** (optional, T3): after finishing, a smaller tapered ball, ball or V-bit goes over only the spots the finishing tool could not get into (eyes, hair, tight creases; see them with Show → Missed areas). It hops between them just over the finished surface instead of going up to the safe height. With it on, **As cut** and **Missed areas** show what is left after both tools.
-- **Cutout** (optional, T1 again): cuts the part free with the roughing tool, round the outside at the tool radius in one continuous spiral (no plunging), down to **Cut below** into the spoilboard, with **Tabs per side** to hold the part. Climb (clockwise) or conventional.
+- **Cutout** (optional, T1 again): cuts the part free with the roughing tool, round the outline (the stock edge, or the shape and edge margin under Stock & border) at the tool radius in one continuous spiral (no plunging), down to **Cut below** into the spoilboard, with **Tabs per side** to hold the part. Climb (clockwise) or conventional.
 - **Machine**: spindle speed range and max feed (the recommendations stay inside them), **Ramp angle** (each cut starts by going back and forth along its start while going down, instead of plunging; 0 = plunge), **Spindle spin-up** (G4 wait after M3) and the **Tool change** style for the all-in-one file.
 
 Every cut starts with a rapid down to 1 mm above the material that is actually there (roughing knows the level above), then the ramp, so the tool doesn't feed slowly through air.
@@ -45,7 +61,7 @@ Exports:
 - **All in one file**: every operation in order with a tool change between tools: `T# M6` (Mach3/4, LinuxCNC, UCCNC, gSender, UGS) or an `M0` pause (plain GRBL, which doesn't know M6; there the separate files are easier).
 - **Setup sheet**: a printable page with stock size, zero, the tool list, each operation's speeds, feeds, steps, chip load and run time, and the setup steps.
 
-**Zero**: X0 Y0 is the front-left corner of the part (bottom-left of the picture). **Toolpaths** in the 3D view draws the paths (roughing orange, finishing blue, detail pink, cutout green), the stock outline and the X0 Y0 Z0 origin (X red, Y green, Z blue), and shows estimated run times.
+**Zero**: X0 Y0 is the front-left corner of the stock (without a stock layout, the bottom-left of the picture). **Toolpaths** in the 3D view draws the paths (roughing orange, finishing blue, detail pink, cutout green), the stock outline and the X0 Y0 Z0 origin (X red, Y green, Z blue), and shows estimated run times.
 
 Changing only G-code settings never recomputes the relief.
 

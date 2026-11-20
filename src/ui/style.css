@@ -119,3 +119,6 @@ div.cam-note { margin: 2px 0 4px; }
 .lib-btns { display: flex; gap: 4px; }
 #camWarn { white-space: pre-line; margin-top: 8px; }
 #tip { position: fixed; z-index: 1000; max-width: 320px; padding: 7px 10px; border-radius: 6px; background: #2b2c2f; color: var(--text); border: 1px solid #45474b; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45); font-size: 12.5px; line-height: 1.45; pointer-events: none; white-space: pre-line; }
+#layoutCv { display: block; margin: 2px auto 6px; border-radius: 4px; cursor: grab; touch-action: none; outline: none; }
+#layoutCv:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+#layoutCv.dragging { cursor: grabbing; }

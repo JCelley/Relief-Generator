@@ -15,6 +15,9 @@ export interface SetupInfo {
   safeZ: number;
   toolChange: 'm6' | 'm0';
   cutout: { tabs: number; tabW: number; tabH: number; through: number } | null;
+  /** the stock was set under Stock & border: its size is exact; `room` = space from the outline
+   *  (where the cutout runs) to the stock edge, `tool` = cutout tool Ø */
+  layout?: { room: number; tool: number; shape: string; border: string };
   ops: {
     name: string;
     number: number;
@@ -64,9 +67,17 @@ export function setupSheet(s: SetupInfo): string {
     .map((o) => `<tr><td>T${o.number}</td><td>${esc(toolLabel(o.tool, len))}, ${o.flutes} flute${o.flutes === 1 ? '' : 's'}</td><td>${s.ops.filter((q) => q.number === o.number).map((q) => esc(q.name)).join(', ')}</td></tr>`)
     .join('\n');
   const stockNote = s.stockTop > s.partTop + 0.01 ? ` (the part is ${len(s.partTop)} tall; roughing faces the extra ${len(s.stockTop - s.partTop)} off)` : ' (exactly the part height)';
+  const L = s.layout;
+  const over = L && s.cutout ? Math.max(0, L.tool + 1 - L.room) : 0;
   const steps = [
-    `Stock at least ${len(s.widthMm + (s.cutout ? 25 : 0))} × ${len(s.heightMm + (s.cutout ? 25 : 0))}, ${len(s.stockTop)} thick${stockNote}. Hold it flat and clamp outside the part${s.cutout ? ' and outside the cutout' : ''}.`,
-    `X0 Y0 = front-left corner of the part (bottom-left of the picture as you look down at it). X to the right, Y away from you.${s.cutout ? ' Leave room around it for the cutout tool.' : ''}`,
+    L
+      ? `Stock ${len(s.widthMm)} × ${len(s.heightMm)}, ${len(s.stockTop)} thick${stockNote}.` +
+        (over > 0 ? ` The cutout runs past its edge: use a board ${len(over)} bigger all round and set X0 Y0 that far in, or add an Edge margin under Stock & border.` : '') +
+        ` Hold it flat and clamp ${s.cutout ? 'outside the cutout' : 'where nothing is cut'}.`
+      : `Stock at least ${len(s.widthMm + (s.cutout ? 25 : 0))} × ${len(s.heightMm + (s.cutout ? 25 : 0))}, ${len(s.stockTop)} thick${stockNote}. Hold it flat and clamp outside the part${s.cutout ? ' and outside the cutout' : ''}.`,
+    L
+      ? `X0 Y0 = front-left corner of the stock. X to the right, Y away from you.`
+      : `X0 Y0 = front-left corner of the part (bottom-left of the picture as you look down at it). X to the right, Y away from you.${s.cutout ? ' Leave room around it for the cutout tool.' : ''}`,
     s.zZero === 'top' ? `Z0 = top of the stock. Touch off on the stock surface.` : `Z0 = bottom of the part: the spoilboard (or the bed the stock sits on).`,
     `Rapids at ${len(s.safeZ)} above the stock. Check that clamps are lower than that.`,
     `Change tools between operations and set Z0 again for each tool, the same way. ${s.toolChange === 'm6' ? 'The all-in-one file stops with T# M6.' : 'The all-in-one file pauses with M0.'}`,
@@ -92,7 +103,7 @@ button { margin: 8px 0; }
 <h1>${esc(s.name)}</h1>
 <div class="small">Relief Generator setup sheet · ${new Date().toLocaleString()}</div>
 <div class="grid">
-<b>Part</b><span>${len(s.widthMm)} × ${len(s.heightMm)}, ${len(s.partTop)} tall (base ${len(s.base)})</span>
+<b>${L ? 'Stock' : 'Part'}</b><span>${len(s.widthMm)} × ${len(s.heightMm)}, ${len(s.partTop)} tall (base ${len(s.base)})${L ? `; ${esc(L.shape)}${L.border !== 'None' ? `, ${esc(L.border)} border` : ''}` : ''}</span>
 <b>Stock</b><span>${len(s.stockTop)} thick, ${esc(s.material)}</span>
 <b>Zero</b><span>X0 Y0 front-left corner · Z0 ${s.zZero === 'top' ? 'top of the stock' : 'spoilboard'}</span>
 <b>Total time</b><span>about ${time(s.total)} plus tool changes</span>

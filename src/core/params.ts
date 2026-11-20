@@ -7,6 +7,7 @@ import illustration from '../../presets/illustration.json';
 export type CompressionMethod = 'baseDetail' | 'gradient';
 export type BgMode = 'flat' | 'keep';
 export type OutputMode = 'relief' | 'lithophane';
+import type { BorderStyle, OutlineShape } from './layout';
 
 /** Every tunable knob. Lengths are millimetres unless noted. */
 export interface ReliefParams {
@@ -125,6 +126,25 @@ export interface ReliefParams {
   cutoutThrough: number;
   cutoutDir: 'climb' | 'conventional';
 
+  /** stock width / height (mm); 0 = fit the picture (plus the border and gap) */
+  stockW: number;
+  stockH: number;
+  /** picture centre relative to the stock centre (mm, + = right / up) */
+  picX: number;
+  picY: number;
+  /** plaque outline (the outer edge of the border; the cutout follows it) */
+  outlineShape: OutlineShape;
+  /** rounded outline: corner radius (mm) */
+  outlineCorner: number;
+  /** outline inset from the stock edge (mm) */
+  borderInset: number;
+  /** border from the library, its width, height above the base, the gap to the picture, and pattern repeat (0 = auto) */
+  borderStyle: BorderStyle;
+  borderWidth: number;
+  borderHeight: number;
+  borderGap: number;
+  borderPitch: number;
+
   /** lithophane: thickness of the lightest areas (mm) */
   lithoMin: number;
   /** lithophane: thickness of the darkest areas (mm) */
@@ -239,6 +259,18 @@ export const DEFAULT_PARAMS: ReliefParams = {
   cutoutTabH: 2,
   cutoutThrough: 0.3,
   cutoutDir: 'climb',
+  stockW: 0,
+  stockH: 0,
+  picX: 0,
+  picY: 0,
+  outlineShape: 'rect',
+  outlineCorner: 12,
+  borderInset: 0,
+  borderStyle: 'none',
+  borderWidth: 12,
+  borderHeight: 4,
+  borderGap: 4,
+  borderPitch: 0,
   lithoMin: 0.8,
   lithoMax: 3.0,
   lithoBorder: 3,
@@ -291,6 +323,11 @@ export const CAM_KEYS = [
   'safeZ', 'zZero', 'stockThick', 'rampAngle', 'spindleDelay', 'toolChange', 'minRpm', 'maxRpm', 'maxFeed',
   'detailOn', 'detailType', 'detailDiameter', 'detailAngle', 'detailStepover', 'detailFlutes', 'detailRpm', 'detailFeed', 'detailPlunge',
   'cutoutOn', 'cutoutTabs', 'cutoutTabW', 'cutoutTabH', 'cutoutThrough', 'cutoutDir',
+] as const satisfies readonly (keyof ReliefParams)[];
+
+/** stock, placement and border: a job setting, kept by Reset all */
+export const LAYOUT_KEYS = [
+  'stockW', 'stockH', 'picX', 'picY', 'outlineShape', 'outlineCorner', 'borderInset', 'borderStyle', 'borderWidth', 'borderHeight', 'borderGap', 'borderPitch',
 ] as const satisfies readonly (keyof ReliefParams)[];
 
 /** the settings the relief / lithophane surface depends on, as a cache key */

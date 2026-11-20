@@ -1,4 +1,5 @@
-import { DEFAULT_PARAMS, PRESETS, PresetName, ReliefParams, minLithoRadius, effectiveGridSpacing, CAM_KEYS } from '../core/params';
+import { DEFAULT_PARAMS, PRESETS, PresetName, ReliefParams, minLithoRadius, effectiveGridSpacing, CAM_KEYS, LAYOUT_KEYS } from '../core/params';
+import { resolveLayout, outlineLoop, isPattern, type Layout } from '../core/layout';
 import { shadeHeightfield } from '../core/shade';
 import type { Grid } from '../core/grid';
 import type { RawInputs } from '../core/relief';
@@ -247,7 +248,7 @@ function syncLibs() {
 
 function buildFields() {
   for (const f of FIELDS) {
-    const host = f.advanced ? $('advanced') : f.cam ? camHost(f.group ?? 'job') : $('basic');
+    const host = f.advanced ? $('advanced') : f.stock ? $('stock') : f.cam ? camHost(f.group ?? 'job') : $('basic');
     const row = document.createElement('div');
     row.className = 'row' + (f.kind === 'range' ? ' range' : '');
     if (f.help) row.title = f.help;
@@ -260,11 +261,19 @@ function buildFields() {
     let unit: HTMLElement | undefined;
     if (f.kind === 'select') {
       input = document.createElement('select');
-      for (const [v, t] of f.options) {
+      let og: HTMLOptGroupElement | null = null;
+      for (const [v, t, g] of f.options) {
         const o = document.createElement('option');
         o.value = v;
         o.textContent = t;
-        input.appendChild(o);
+        if (g) {
+          if (og?.label !== g) {
+            og = document.createElement('optgroup');
+            og.label = g;
+            input.appendChild(og);
+          }
+          og.appendChild(o);
+        } else input.appendChild(o);
       }
     } else {
       input = document.createElement('input');
@@ -389,9 +398,18 @@ function syncOutputs(force = false) {
   for (const k of ['cutoutTabs', 'cutoutTabW', 'cutoutTabH', 'cutoutThrough', 'cutoutDir'] as const) vis(k, params.cutoutOn);
   vis('cutoutTabW', params.cutoutOn && params.cutoutTabs > 0);
   vis('cutoutTabH', params.cutoutOn && params.cutoutTabs > 0);
-  $('cutoutNote').textContent = params.cutoutOn ? `Uses the roughing tool (${params.roughOn ? 'set above' : 'shown above'}) and its stepdown and feeds.` : '';
+  const shapeName = { rect: 'the stock edge', rounded: 'the rounded outline', oval: 'the oval', arch: 'the arched outline' }[params.outlineShape];
+  const along = params.outlineShape === 'rect' && params.borderInset > 0 ? 'the outline (inset from the stock edge)' : shapeName;
+  $('cutoutNote').textContent = params.cutoutOn ? `Goes round ${along} (Stock & border). Uses the roughing tool (${params.roughOn ? 'set above' : 'shown above'}) and its stepdown and feeds.` : '';
   syncLibs();
   $('camSection').hidden = litho;
+  $('stockSection').hidden = litho;
+  $('widthLabel').textContent = litho ? 'Width' : 'Picture width';
+  $('heightLabel').textContent = litho ? 'Height' : 'Picture height';
+  vis('outlineCorner', params.outlineShape === 'rounded');
+  for (const k of ['borderWidth', 'borderHeight', 'borderGap'] as const) vis(k, params.borderStyle !== 'none');
+  vis('borderPitch', isPattern(params.borderStyle));
+  drawLayout();
   $('pathCtl').hidden = litho;
   updateCamInfo();
   if (!litho) {
@@ -432,7 +450,7 @@ function updateDims() {
     $('dims').textContent = 'No relief yet';
     return;
   }
-  hOut.textContent = fmtLen(s.heightMm);
+  hOut.textContent = fmtLen(s.picH ?? s.heightMm);
   const both = (mm: number) => `${mm.toFixed(2)} mm / ${(mm / MM_PER_IN).toFixed(3)} in`;
   $('dims').textContent =
     `W × H  ${s.widthMm.toFixed(1)} × ${s.heightMm.toFixed(1)} mm  (${(s.widthMm / MM_PER_IN).toFixed(2)} × ${(s.heightMm / MM_PER_IN).toFixed(2)} in)\n` +
@@ -508,7 +526,7 @@ function updateCamInfo() {
   if (lastPaths && showPaths())
     info.push(`Estimated time: ${lastPaths.ops.map((o) => `${o.name} ${fmtTime(o.sec)}`).join(', ')}${lastPaths.ops.length > 1 ? `; ${fmtTime(lastPaths.total)} in all, plus tool changes` : ''}.`);
   else info.push('Tick Toolpaths in the 3D view to see the paths and run times.');
-  info.push(`X0 Y0 = front-left corner of the part; Z0 = ${params.zZero === 'top' ? 'top of the stock' : 'spoilboard'}. Set Z0 again after each tool change.`);
+  info.push(`X0 Y0 = front-left corner of the stock; Z0 = ${params.zZero === 'top' ? 'top of the stock' : 'spoilboard'}. Set Z0 again after each tool change.`);
   $('camInfo').textContent = info.join('\n');
   const w = $('camWarn');
   w.textContent = warn.join('\n');
@@ -890,6 +908,7 @@ computeWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
     preview.setToolpaths(m.paths?.ops ?? null, m.paths ? { stockTop: m.paths.stockTop, zeroZ: m.paths.zeroZ } : undefined);
     updateCamInfo();
     drawRelief(shown, m.nx, m.ny, m.stats);
+    drawLayout();
     updateDims();
     setExportsEnabled(true);
     if (dirty) requestRelief();
@@ -952,6 +971,169 @@ computeWorker.onmessage = (ev: MessageEvent<ComputeResponse>) => {
   }
 };
 
+// ---- stock & border layout ---------------------------------------------------------------------
+/** the layout as the panel shows it now (null before the first relief: the picture's shape is unknown) */
+function currentLayout(): Layout | null {
+  const s = lastStats;
+  if (params.mode !== 'relief' || !s?.picW || !s.picH) return null;
+  return resolveLayout(params, params.widthMm, (params.widthMm * s.picH) / s.picW);
+}
+let layoutK = 1;
+let snapped = { x: false, y: false };
+
+/** top view of the stock: the last shaded relief, the outline, the border and the picture frame */
+function drawLayout() {
+  const cv = $<HTMLCanvasElement>('layoutCv');
+  const L = currentLayout();
+  const info = $('stockInfo');
+  if (!L) {
+    cv.hidden = true;
+    info.textContent = params.mode === 'relief' ? 'Load a photo to lay it out on the stock.' : '';
+    return;
+  }
+  cv.hidden = false;
+  const avail = Math.max(160, (cv.parentElement as HTMLElement).clientWidth || 300);
+  const k = Math.min(avail / L.W, 240 / L.H);
+  layoutK = k;
+  const w = Math.max(1, Math.round(L.W * k)), h = Math.max(1, Math.round(L.H * k));
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  cv.style.width = `${w}px`;
+  cv.style.height = `${h}px`;
+  const ctx = cv.getContext('2d')!;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#3a342c';
+  ctx.fillRect(0, 0, w, h);
+  // the shaded relief covers the stock as last computed
+  const s = lastStats!;
+  const rc = $<HTMLCanvasElement>('cvRelief');
+  if (rc.width > 1 && Math.abs(s.widthMm - L.W) < 0.05 && Math.abs(s.heightMm - L.H) < 0.05) ctx.drawImage(rc, 0, 0, w, h);
+  const X = (x: number) => x * k, Y = (y: number) => h - y * k;
+  const path = (pts: [number, number][]) => {
+    ctx.beginPath();
+    pts.forEach(([x, y], i) => (i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))));
+    ctx.closePath();
+  };
+  const tol = 0.5 / k;
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = '#e0b070';
+  path(outlineLoop(L.outline, 0, tol));
+  ctx.stroke();
+  if (L.bw > 0) {
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(224,176,112,0.6)';
+    path(outlineLoop(L.outline, -L.bw, tol));
+    ctx.stroke();
+  }
+  // centre lines the picture snaps to
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 3]);
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.beginPath();
+  if (snapped.x) ctx.moveTo(w / 2 + 0.5, 0), ctx.lineTo(w / 2 + 0.5, h);
+  if (snapped.y) ctx.moveTo(0, h / 2 + 0.5), ctx.lineTo(w, h / 2 + 0.5);
+  ctx.stroke();
+  // the picture
+  ctx.setLineDash([5, 4]);
+  ctx.strokeStyle = '#7fc8ff';
+  ctx.lineWidth = 1.5;
+  const p = L.pic;
+  ctx.strokeRect(X(p.x0) + 0.5, Y(p.y0 + p.h) + 0.5, p.w * k - 1, p.h * k - 1);
+  ctx.setLineDash([]);
+
+  const fmtOff = (v: number) => (v >= 0 ? '+' : '−') + fmtLen(Math.abs(v));
+  const lines = [
+    `Stock ${fmtLen(L.W)} × ${fmtLen(L.H)}` + (params.stockThick > 0 ? ` × ${fmtLen(params.stockThick)}` : '') + (params.stockW || params.stockH ? '' : ' (fits the picture)'),
+    `Picture ${fmtLen(p.w)} × ${fmtLen(p.h)}, centre ${fmtOff(params.picX)} X, ${fmtOff(params.picY)} Y from the middle.`,
+  ];
+  if (L.border !== 'none' && isPattern(L.border)) lines.push(`Pattern repeat about ${fmtLen(L.pitch)} (fitted so the ends meet).`);
+  // what falls outside the space inside the border
+  const a = L.outline.a - L.window, b = L.outline.b - L.window, cx = L.outline.cx, cy = L.outline.cy;
+  const over = p.x0 < cx - a - 0.01 || p.x0 + p.w > cx + a + 0.01 || p.y0 < cy - b - 0.01 || p.y0 + p.h > cy + b + 0.01;
+  if (over || L.outline.kind === 'oval' || L.outline.kind === 'arch')
+    lines.push(L.border !== 'none' || L.window > 0 ? 'What reaches past the border fades out before it.' : 'What reaches past the outline fades out at it.');
+  if (L.border !== 'none' && params.outlineShape === 'rounded' && isPattern(L.border) && L.outline.c < L.bw / 2)
+    lines.push('Tip: a corner radius of at least half the border width lets the pattern flow round the corners.');
+  info.textContent = lines.join('\n');
+  const auto = !(params.stockW > 0) && !(params.stockH > 0);
+  ($('picFit') as HTMLButtonElement).disabled = auto;
+  ($('picFill') as HTMLButtonElement).disabled = auto;
+}
+
+function setParam<K extends keyof ReliefParams>(key: K, v: ReliefParams[K]) {
+  params[key] = v;
+  const e = inputs.get(key);
+  if (e) e.input.value = String(v);
+}
+
+/** picture size that fits inside (or fills) the space inside the border on the stock that was set */
+function fitPicture(fill: boolean) {
+  const L = currentLayout();
+  if (!L) return;
+  const aspect = L.pic.w / L.pic.h;
+  const wMax = params.stockW > 0 ? 2 * (L.outline.a - L.window) : Infinity;
+  const hMax = params.stockH > 0 ? 2 * (L.outline.b - L.window) : Infinity;
+  const byH = hMax * aspect;
+  const w = Number.isFinite(wMax) && Number.isFinite(byH) ? (fill ? Math.max(wMax, byH) : Math.min(wMax, byH)) : Math.min(wMax, byH);
+  if (!(w > 1) || !Number.isFinite(w)) return;
+  params.widthMm = Math.round(w * 10) / 10;
+  setParam('picX', 0);
+  setParam('picY', 0);
+  syncInputs();
+  onParamsChanged();
+}
+
+{
+  const cv = $<HTMLCanvasElement>('layoutCv');
+  let drag: { x: number; y: number; px: number; py: number } | null = null;
+  const move = (nx: number, ny: number) => {
+    // snap to the centre lines within a few pixels
+    const snap = 6 / layoutK;
+    snapped = { x: Math.abs(nx) < snap, y: Math.abs(ny) < snap };
+    setParam('picX', snapped.x ? 0 : Math.round(nx * 10) / 10);
+    setParam('picY', snapped.y ? 0 : Math.round(ny * 10) / 10);
+    syncOutputs(true);
+    onParamsChanged();
+  };
+  cv.addEventListener('pointerdown', (e) => {
+    drag = { x: e.clientX, y: e.clientY, px: params.picX, py: params.picY };
+    cv.setPointerCapture(e.pointerId);
+    cv.classList.add('dragging');
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    move(drag.px + (e.clientX - drag.x) / layoutK, drag.py - (e.clientY - drag.y) / layoutK);
+  });
+  const end = () => {
+    drag = null;
+    snapped = { x: false, y: false };
+    cv.classList.remove('dragging');
+    drawLayout();
+  };
+  cv.addEventListener('pointerup', end);
+  cv.addEventListener('pointercancel', end);
+  cv.addEventListener('keydown', (e) => {
+    const step = (units === 'in' ? MM_PER_IN / 16 : 1) * (e.shiftKey ? 10 : 1);
+    const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
+    if (!d) return;
+    e.preventDefault();
+    setParam('picX', Math.round((params.picX + d[0]) * 100) / 100);
+    setParam('picY', Math.round((params.picY + d[1]) * 100) / 100);
+    syncOutputs(true);
+    onParamsChanged();
+  });
+  $('picCentre').addEventListener('click', () => {
+    setParam('picX', 0);
+    setParam('picY', 0);
+    syncOutputs(true);
+    onParamsChanged();
+  });
+  $('picFit').addEventListener('click', () => fitPicture(false));
+  $('picFill').addEventListener('click', () => fitPicture(true));
+  window.addEventListener('resize', () => drawLayout());
+}
+
 let exportOp: GcodeOp = 'finishing';
 let setupWin: Window | null = null;
 function doExport(kind: ExportKind, label: string, op?: GcodeOp) {
@@ -993,7 +1175,7 @@ $('resetAll').addEventListener('click', () => {
   // back to factory settings + the selected preset; keep the part size and stock the user chose
   // (and the G-code / machine settings: they belong to the shop, not the picture)
   const { mode, widthMm, reliefHeight, baseThickness } = params;
-  const cam = Object.fromEntries(CAM_KEYS.map((k) => [k, params[k]]));
+  const cam = Object.fromEntries([...CAM_KEYS, ...LAYOUT_KEYS].map((k) => [k, params[k]]));
   params = { ...DEFAULT_PARAMS, ...cam, mode, widthMm, reliefHeight, baseThickness };
   applyPreset();
 });

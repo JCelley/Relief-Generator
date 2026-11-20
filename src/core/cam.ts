@@ -124,6 +124,170 @@ function simplify(u: number[], z: number[], tol: number): number[] {
   return out;
 }
 
+/** square dilation of a 0/1 mask by ri columns and rj rows (separable) */
+function dilate(mask: Uint8Array, nx: number, ny: number, ri: number, rj: number): Uint8Array {
+  const tmp = new Uint8Array(nx * ny), out = new Uint8Array(nx * ny);
+  for (let j = 0; j < ny; j++) {
+    let last = -1e9;
+    for (let i = 0; i < nx; i++) {
+      if (mask[j * nx + i]) last = i;
+      if (i - last <= ri) tmp[j * nx + i] = 1;
+    }
+    last = 1e9;
+    for (let i = nx - 1; i >= 0; i--) {
+      if (mask[j * nx + i]) last = i;
+      if (last - i <= ri) tmp[j * nx + i] = 1;
+    }
+  }
+  for (let i = 0; i < nx; i++) {
+    let last = -1e9;
+    for (let j = 0; j < ny; j++) {
+      if (tmp[j * nx + i]) last = j;
+      if (j - last <= rj) out[j * nx + i] = 1;
+    }
+    last = 1e9;
+    for (let j = ny - 1; j >= 0; j--) {
+      if (tmp[j * nx + i]) last = j;
+      if (last - j <= rj) out[j * nx + i] = 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * Grid points the finishing tool need not visit: flat floor that a flat roughing end mill has
+ * already cut to depth (it met only the floor there, and so did its neighbours on the roughing lines
+ * either side), where the finishing tool would only ride on that floor. Null if roughing can't do it.
+ */
+export function floorSkip(g: MachGrid, rough: Cutter, finish: Cutter, roughStepover: number): Uint8Array | null {
+  if (rough.type !== 'flat') return null;
+  const { nx, ny } = g, fl = g.zMin + 1e-4;
+  const tr = tipHeight(g, rough), tf = tipHeight(g, finish);
+  // not reached by the roughing tool at floor depth, grown by half a roughing stepover and a margin
+  const notDone = new Uint8Array(nx * ny);
+  for (let k = 0; k < notDone.length; k++) notDone[k] = tr[k] > fl ? 1 : 0;
+  const m = roughStepover / 2 + 0.5;
+  const grown = dilate(notDone, nx, ny, Math.ceil(m / g.dx), Math.ceil(m / g.dy));
+  const skip = new Uint8Array(nx * ny);
+  let n = 0;
+  for (let k = 0; k < skip.length; k++) if (!grown[k] && tf[k] <= fl) (skip[k] = 1), n++;
+  return n ? skip : null;
+}
+
+/** square running maximum of a grid over ±ri columns and ±rj rows (separable) */
+function maxFilter(a: Float32Array, nx: number, ny: number, ri: number, rj: number): Float32Array {
+  const tmp = new Float32Array(nx * ny), out = new Float32Array(nx * ny);
+  for (let j = 0; j < ny; j++)
+    for (let i = 0; i < nx; i++) {
+      let m = -Infinity;
+      for (let q = Math.max(0, i - ri); q <= Math.min(nx - 1, i + ri); q++) m = Math.max(m, a[j * nx + q]);
+      tmp[j * nx + i] = m;
+    }
+  for (let i = 0; i < nx; i++)
+    for (let j = 0; j < ny; j++) {
+      let m = -Infinity;
+      for (let q = Math.max(0, j - rj); q <= Math.min(ny - 1, j + rj); q++) m = Math.max(m, tmp[q * nx + i]);
+      out[j * nx + i] = m;
+    }
+  return out;
+}
+
+/**
+ * Highest the material can be after roughing, as met by a tool of radius `reach` coming down at
+ * each point. Roughing takes every point on its lines down to the tool's final height there (the
+ * design plus the allowance, or the floor), and every point lies within half a stepover of a line,
+ * inside the tool's footprint: so the material is no higher than that final height within half a
+ * stepover, and the tool meets the highest of that within its own radius.
+ */
+export function roughRest(g: MachGrid, rough: Cutter, allowance: number, stepover: number, reach: number): Float32Array {
+  const tip = tipHeight(g, rough);
+  const floor = rough.type === 'flat' ? g.zMin + 1e-4 : -Infinity;
+  for (let k = 0; k < tip.length; k++) if (tip[k] > floor) tip[k] += allowance;
+  const m = stepover / 2 + reach + 0.05;
+  return maxFilter(tip, g.nx, g.ny, Math.ceil(m / g.dx), Math.ceil(m / g.dy));
+}
+
+export interface FinishRunOpts extends FinishOpts {
+  /** grid points to leave out (see floorSkip) */
+  skip: Uint8Array;
+  /** highest the material can be before this pass, as met by this tool (see roughRest) */
+  rest: Float32Array;
+  stockTop: number;
+}
+
+/**
+ * Raster finishing that leaves out floor already cut to depth: each line is split into runs
+ * (joined over gaps up to 2 mm), and between runs the tool rapids across over the material instead
+ * of feeding over the floor.
+ */
+export function finishingRuns(g: MachGrid, o: FinishRunOpts): PathSet {
+  const { nx, ny } = g;
+  const tip = tipHeight(g, o.tool);
+  const out: PathSet = { paths: [], entry: [], link: [] };
+  let last: Path | null = null;
+  const dirs: ('x' | 'y')[] = o.dir === 'xy' ? ['x', 'y'] : [o.dir];
+  dirs.forEach((along, di) => {
+    // the second direction of a cross-hatch goes over a surface the first one finished
+    const top = di === 0 ? o.rest : tip;
+    const n = along === 'x' ? nx : ny, m = along === 'x' ? ny : nx;
+    const d = along === 'x' ? g.dy : g.dx, du = along === 'x' ? g.dx : g.dy;
+    const across = along === 'x' ? g.heightMm : g.widthMm;
+    const idx = (k: number, gi: number) => (along === 'x' ? gi * nx + k : k * nx + gi);
+    const pos = (k: number) => (k === n - 1 ? (along === 'x' ? g.widthMm : g.heightMm) : k * du);
+    /** highest the material can be in the box between two points, plus a margin */
+    const hop = (x0: number, y0: number, x1: number, y1: number) => {
+      const i0 = Math.max(0, Math.floor(Math.min(x0, x1) / g.dx)), i1 = Math.min(nx - 1, Math.ceil(Math.max(x0, x1) / g.dx));
+      const j0 = Math.max(0, Math.floor(Math.min(y0, y1) / g.dy)), j1 = Math.min(ny - 1, Math.ceil(Math.max(y0, y1) / g.dy));
+      if ((i1 - i0 + 1) * (j1 - j0 + 1) > 200_000) return NaN;
+      let h = -Infinity;
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) h = Math.max(h, top[j * nx + i]);
+      return Math.min(o.stockTop, h) + 0.2;
+    };
+    const gap = Math.ceil(2 / du);
+    const count = Math.max(1, Math.ceil(across / o.stepover - 1e-6));
+    for (let li = 0; li <= count; li++) {
+      const s = Math.min(across, li * (across / count));
+      const f = Math.min(m - 1, Math.max(0, s / d));
+      const a = Math.floor(f), b = Math.min(m - 1, a + 1), w = f - a;
+      const zAt = (k: number) => tip[idx(k, a)] * (1 - w) + tip[idx(k, b)] * w;
+      const work = (k: number) => !(o.skip[idx(k, a)] && o.skip[idx(k, b)]);
+      const fwd = li % 2 === 0;
+      const runs: number[][] = [];
+      let cur: number[] = [], miss = 0;
+      for (let q = 0; q < n; q++) {
+        const k = fwd ? q : n - 1 - q;
+        if (work(k)) {
+          if (cur.length && miss) for (let r = miss; r > 0; r--) cur.push(fwd ? k - r : k + r);
+          cur.push(k);
+          miss = 0;
+        } else if (cur.length && ++miss > gap) {
+          runs.push(cur);
+          cur = [];
+          miss = 0;
+        }
+      }
+      if (cur.length) runs.push(cur);
+      for (const r of runs) {
+        const keep = simplify(r.map(pos), r.map(zAt), 0.002);
+        const pts: number[] = [];
+        for (const q of keep) {
+          const k = r[q];
+          if (along === 'x') pts.push(pos(k), s, zAt(k));
+          else pts.push(s, pos(k), zAt(k));
+        }
+        const p = Float32Array.from(pts);
+        const k0 = r[0];
+        out.entry.push(Math.max(p[2], Math.min(o.stockTop, Math.max(top[idx(k0, a)], top[idx(k0, b)]))));
+        const q = last ? last.length - 3 : 0;
+        out.link!.push(last ? hop(last[q], last[q + 1], p[0], p[1]) : NaN);
+        out.paths.push(p);
+        last = p;
+      }
+    }
+  });
+  return out;
+}
+
 // ---- roughing -----------------------------------------------------------------------------------
 
 export interface RoughOpts {
@@ -150,11 +314,15 @@ export interface PathSet {
  * than `stepdown` per level and never closer than `allowance` to the design. Every point of a run
  * was visited at the level above (same lines every level), so the material over a run's start is at
  * most that level: the tool can come down fast to just above it and ramp in from there.
+ * With a flat end mill, the flat floor of the part is cut to its final depth (no allowance).
  */
 export function roughingPaths(g: MachGrid, o: RoughOpts): PathSet {
   const { nx, ny } = g;
   const tip = tipHeight(g, o.tool);
-  for (let k = 0; k < tip.length; k++) tip[k] += o.allowance;
+  // a flat end mill cuts the flat floor (the lowest level) to its final depth: there it meets only
+  // the floor, and its bottom leaves it as flat as a finishing pass would
+  const floor = o.tool.type === 'flat' ? g.zMin + 1e-4 : -Infinity;
+  for (let k = 0; k < tip.length; k++) if (tip[k] > floor) tip[k] += o.allowance;
   let lo = Infinity;
   for (const v of tip) lo = Math.min(lo, v);
   const X = (i: number) => (i === nx - 1 ? g.widthMm : i * g.dx);
@@ -231,33 +399,7 @@ export function detailRegion(g: MachGrid, tool: Cutter, finishCut: Float32Array,
     }
   }
   const rad = toolRadiusAt(tool, depth) + 0.5;
-  const ri = Math.ceil(rad / g.dx), rj = Math.ceil(rad / g.dy);
-  // square dilation, separable: rows then columns
-  const tmp = new Uint8Array(nx * ny), region = new Uint8Array(nx * ny);
-  for (let j = 0; j < ny; j++) {
-    let last = -1e9;
-    for (let i = 0; i < nx; i++) {
-      if (seed[j * nx + i]) last = i;
-      if (i - last <= ri) tmp[j * nx + i] = 1;
-    }
-    last = 1e9;
-    for (let i = nx - 1; i >= 0; i--) {
-      if (seed[j * nx + i]) last = i;
-      if (last - i <= ri) tmp[j * nx + i] = 1;
-    }
-  }
-  for (let i = 0; i < nx; i++) {
-    let last = -1e9;
-    for (let j = 0; j < ny; j++) {
-      if (tmp[j * nx + i]) last = j;
-      if (j - last <= rj) region[j * nx + i] = 1;
-    }
-    last = 1e9;
-    for (let j = ny - 1; j >= 0; j--) {
-      if (tmp[j * nx + i]) last = j;
-      if (last - j <= rj) region[j * nx + i] = 1;
-    }
-  }
+  const region = dilate(seed, nx, ny, Math.ceil(rad / g.dx), Math.ceil(rad / g.dy));
   let n = 0;
   for (const v of region) n += v;
   return { region, cut, area: (n / region.length) * g.widthMm * g.heightMm };
@@ -365,6 +507,15 @@ export interface CutoutOpts {
   tabHeight: number;
   /** climb: clockwise around the part (seen from above, spindle turning clockwise) */
   climb: boolean;
+  /** front-left corner of the outline's box (default 0, 0) and its corner radius (default 0) */
+  x0?: number;
+  y0?: number;
+  corner?: number;
+  /**
+   * any other convex outline: the tool-centre loop, counter-clockwise (the outline offset by the
+   * tool radius); tabs are then spread evenly, `tabs` per quarter of the way round
+   */
+  loop?: [number, number][];
 }
 
 /**
@@ -374,17 +525,19 @@ export interface CutoutOpts {
  */
 export function cutoutPath(o: CutoutOpts): Path {
   const r = Math.max(0, o.tool.diameter / 2), W = o.widthMm, H = o.heightMm;
+  const c = Math.max(0, Math.min(o.corner ?? 0, W / 2, H / 2)), R = c + r;
   // the outline as a polyline, clockwise from the bottom of the left side
-  const loop: [number, number][] = [];
+  let loop: [number, number][] = [];
   const line = (x0: number, y0: number, x1: number, y1: number) => {
     const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 2));
     for (let k = 0; k < n; k++) loop.push([x0 + ((x1 - x0) * k) / n, y0 + ((y1 - y0) * k) / n]);
   };
   const arc = (cx: number, cy: number, a0: number, a1: number) => {
-    if (r < 1e-6) return;
-    for (let k = 0; k < 12; k++) {
-      const a = ((a0 + ((a1 - a0) * k) / 12) * Math.PI) / 180;
-      loop.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+    if (R < 1e-6) return;
+    const n = Math.max(12, Math.ceil((R * Math.PI) / 2 / 0.5));
+    for (let k = 0; k < n; k++) {
+      const a = ((a0 + ((a1 - a0) * k) / n) * Math.PI) / 180;
+      loop.push([cx + R * Math.cos(a), cy + R * Math.sin(a)]);
     }
   };
   // straight sides as [start index, end index] for the tabs
@@ -394,15 +547,25 @@ export function cutoutPath(o: CutoutOpts): Path {
     line(x0, y0, x1, y1);
     sides.push([s, loop.length]);
   };
-  side(-r, 0, -r, H);
-  arc(0, H, 180, 90);
-  side(0, H + r, W, H + r);
-  arc(W, H, 90, 0);
-  side(W + r, H, W + r, 0);
-  arc(W, 0, 0, -90);
-  side(W, -r, 0, -r);
-  arc(0, 0, -90, -180);
-  loop.push([-r, 0]);
+  if (o.loop) {
+    // clockwise, starting and ending at the first point
+    loop = [...o.loop].reverse();
+    loop.push(loop[0]);
+  } else {
+    side(-r, c, -r, H - c);
+    arc(c, H - c, 180, 90);
+    side(c, H + r, W - c, H + r);
+    arc(W - c, H - c, 90, 0);
+    side(W + r, H - c, W + r, c);
+    arc(W - c, c, 0, -90);
+    side(W - c, -r, c, -r);
+    arc(c, c, -90, -180);
+    loop.push([-r, c]);
+    for (const q of loop) {
+      q[0] += o.x0 ?? 0;
+      q[1] += o.y0 ?? 0;
+    }
+  }
   // arc length along the loop
   const arcLen = () => {
     const a = [0];
@@ -413,9 +576,10 @@ export function cutoutPath(o: CutoutOpts): Path {
   const P = u[u.length - 1];
   // tab intervals along the loop (centred on each side, long enough to clear the tool)
   const tabs: [number, number][] = [];
+  const ranges: [number, number][] = o.loop ? [0, 1, 2, 3].map((k) => [(P * k) / 4, (P * (k + 1)) / 4]) : sides.map(([s, e]) => [u[s], u[Math.min(e, loop.length - 1)]]);
   if (o.tabs > 0)
-    for (const [s, e] of sides) {
-      let ua = u[s], ub = u[Math.min(e, loop.length - 1)];
+    for (const [ra, rb] of ranges) {
+      let ua = ra, ub = rb;
       // conventional: the same loop run backwards
       if (!o.climb) [ua, ub] = [P - ub, P - ua];
       for (let k = 0; k < o.tabs; k++) {
