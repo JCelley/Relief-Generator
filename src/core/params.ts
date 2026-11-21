@@ -8,6 +8,7 @@ export type CompressionMethod = 'baseDetail' | 'gradient';
 export type BgMode = 'flat' | 'keep';
 export type OutputMode = 'relief' | 'lithophane';
 import type { BorderStyle, OutlineShape } from './layout';
+import type { TextItem } from './text';
 
 /** Every tunable knob. Lengths are millimetres unless noted. */
 export interface ReliefParams {
@@ -147,6 +148,8 @@ export interface ReliefParams {
   borderHeight: number;
   borderGap: number;
   borderPitch: number;
+  /** text items on a CNC relief */
+  texts: TextItem[];
 
   /** lithophane: thickness of the lightest areas (mm) */
   lithoMin: number;
@@ -276,6 +279,7 @@ export const DEFAULT_PARAMS: ReliefParams = {
   borderHeight: 4,
   borderGap: 4,
   borderPitch: 0,
+  texts: [],
   lithoMin: 0.8,
   lithoMax: 3.0,
   lithoBorder: 3,
@@ -332,7 +336,7 @@ export const CAM_KEYS = [
 
 /** stock, placement and border: a job setting, kept by Reset all */
 export const LAYOUT_KEYS = [
-  'stockW', 'stockH', 'stockThick', 'partW', 'partH', 'picX', 'picY', 'outlineShape', 'outlineCorner', 'borderInset', 'borderStyle', 'borderWidth', 'borderHeight', 'borderGap', 'borderPitch',
+  'stockW', 'stockH', 'stockThick', 'partW', 'partH', 'picX', 'picY', 'outlineShape', 'outlineCorner', 'borderInset', 'borderStyle', 'borderWidth', 'borderHeight', 'borderGap', 'borderPitch', 'texts',
 ] as const satisfies readonly (keyof ReliefParams)[];
 
 /** the settings the relief / lithophane surface depends on, as a cache key */

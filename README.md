@@ -39,6 +39,19 @@ The **Stock & border** section separates the board you start from (the stock) fr
 
 Changing the layout or the border doesn't recompute the relief, so it updates in a fraction of a second.
 
+### Text (CNC relief)
+
+**Add text** puts a line of text on the relief; add as many as you like (one per line or word group). For each:
+
+- **Text** and **Font**: 13 free fonts are built in (SIL Open Font License / Apache, so they work offline): Roman capitals (Cinzel), serif, slab and western (Rye), sans and tall capitals, formal and casual scripts, and blackletter, plus Arial, Georgia, Times New Roman and Impact if the computer has them.
+- **Letter height** (of the capitals), **Letter spacing**, **Arc** (bends the text along a circle: + arches up like the top of a badge, − curves down like a smile, 0 = straight), **Rotation**, and **Text X / Y** from the middle of the stock. Or drag it in the top view under Stock & border (it snaps to the centre lines; arrow keys nudge the picked text).
+- **Style**:
+  - Raised: rounded (carved look), flat-topped, or bevelled at 45°. Raised letters stand on the base, so put them on the flat area round the picture, in the gap, or on a cleared panel.
+  - Carved in: V-carved (as a 60° V-bit cuts: sharp with a V-bit detail pass), or flat-bottomed. These go into any surface, including uncut board.
+  - **Height** / **Depth** sets how high or deep.
+
+Text is part of the surface, so the cutter check (As cut / Missed areas), toolpaths, run times and exports all include it. Moving a text or changing its style or height doesn't redraw the letters.
+
 ### G-code for a 3-axis router
 
 The **G-code** section (CNC relief mode) writes plain G-code that GRBL, Mach3/4, LinuxCNC, UCCNC and most hobby controllers run (G20/G21 follows the inch/mm setting). It is split into groups, each with its estimated run time next to its heading (the whole job next to Job). The times are worked out in the background after each change, from the feeds, rapids, ramps and spindle spin-up; real runs take longer on lots of short moves (acceleration), often 10–30 %.

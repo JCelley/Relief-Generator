@@ -123,3 +123,7 @@ div.cam-note { margin: 2px 0 4px; }
 #layoutCv:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
 #layoutCv.dragging { cursor: grabbing; }
 .op-time { margin-left: 6px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--accent); opacity: 1; font-variant-numeric: tabular-nums; }
+.text-list { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 4px; }
+.text-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.text-chip.on { border-color: var(--accent); color: var(--accent); }
+.text-input { width: 100%; box-sizing: border-box; }

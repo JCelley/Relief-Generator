@@ -3,6 +3,7 @@ import { gaussianBlur } from './filters';
 import { ReliefParams, effectiveGridSpacing } from './params';
 import { Layout, resolveLayout, sdf, borderProfile, makeAlong, isPattern } from './layout';
 import { smoothstep } from './distance';
+import { applyTexts, type TextField } from './text';
 
 /**
  * Heightfield on the machining grid, in CAD orientation:
@@ -27,8 +28,17 @@ export function reliefSizeMm(imgW: number, imgH: number, widthMm: number): { wid
   return { widthMm, heightMm: (widthMm * imgH) / imgW };
 }
 
-/** Convert normalised relief height (0..1, working res) to millimetres on the machining grid. */
-export function toMachiningGrid(height01: Grid, p: ReliefParams): MachGrid {
+/**
+ * Convert normalised relief height (0..1, working res) to millimetres on the machining grid, with
+ * the stock layout, border and (given their drawn letters) the text items.
+ */
+export function toMachiningGrid(height01: Grid, p: ReliefParams, texts?: Map<string, TextField>): MachGrid {
+  const m = surfaceGrid(height01, p);
+  if (p.mode === 'relief' && p.texts?.length && texts) applyTexts(m, p.texts, texts, p.baseThickness);
+  return m;
+}
+
+function surfaceGrid(height01: Grid, p: ReliefParams): MachGrid {
   const { widthMm, heightMm } = reliefSizeMm(height01.w, height01.h, p.widthMm);
   const L = resolveLayout(p, widthMm, heightMm);
   if (L.active) return composeGrid(height01, p, L);

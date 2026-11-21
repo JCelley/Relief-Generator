@@ -16,6 +16,9 @@ import { recommend, stepoverFor, scallopHeight, chipRatio, toolLabel, type Mater
 import type { Cutter, ToolType } from '../core/cutter';
 import { loadTools, saveTools, defaultName, sameTool, type LibTool } from './tools';
 import { initTooltips } from './tooltip';
+import { TextPanel } from './textPanel';
+import { rasterizeText } from './textRaster';
+import { rasterKey, isCarved, type TextItem } from '../core/text';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const MM_PER_IN = 25.4;
@@ -465,6 +468,8 @@ function syncOutputs(force = false) {
   syncLibs();
   $('camSection').hidden = litho;
   $('stockSection').hidden = litho;
+  $('textSection').hidden = litho;
+  updateTextInfo();
   $('widthLabel').textContent = litho ? 'Width' : 'Picture width';
   $('heightLabel').textContent = litho ? 'Height' : 'Picture height';
   vis('outlineCorner', params.outlineShape === 'rounded');
@@ -695,12 +700,44 @@ function onParamsChanged() {
 /** the settings of the relief being computed (the run times go with them) */
 let sentParams: ReliefParams = { ...params };
 
+// ---- text: the browser draws the letters, the worker carves them ---------------------------------
+const textsSent = new Set<string>();
+/** size of each drawn text (mm), for the top view */
+const textSizes = new Map<string, { wMm: number; hMm: number }>();
+let textsDrawing = false;
+/** true when every text item's letters are in the worker; otherwise draws them and asks again */
+function textsReady(): boolean {
+  const items = params.mode === 'relief' ? params.texts : [];
+  const missing = items.filter((t) => !textsSent.has(rasterKey(t)));
+  if (!missing.length) return true;
+  if (textsDrawing) return false;
+  textsDrawing = true;
+  const uniq = [...new Map(missing.map((t) => [rasterKey(t), t])).values()];
+  Promise.all(uniq.map(rasterizeText))
+    .then((rs) => {
+      const keep = [...new Set([...params.texts.map(rasterKey), ...rs.map((r) => r.key)])];
+      sendCompute({ type: 'texts', keep, add: rs.map(({ key, w, h, pxPerMm, mask }) => ({ key, w, h, pxPerMm, mask })) }, rs.map((r) => r.mask.buffer));
+      for (const r of rs) {
+        textsSent.add(r.key);
+        textSizes.set(r.key, { wMm: r.wMm, hMm: r.hMm });
+      }
+      for (const k of [...textsSent]) if (!keep.includes(k)) textsSent.delete(k);
+    })
+    .catch((e) => status(`Could not draw the text: ${e instanceof Error ? e.message : e}`, true))
+    .finally(() => {
+      textsDrawing = false;
+      requestRelief();
+    });
+  return false;
+}
+
 function requestRelief() {
   if (busy) {
     dirty = true;
     return;
   }
   if (!haveInputsFor()) return;
+  if (!textsReady()) return;
   busy = true;
   dirty = false;
   showMaskWarning();
@@ -1124,6 +1161,18 @@ function drawLayout() {
   const p = L.pic;
   ctx.strokeRect(X(p.x0) + 0.5, Y(p.y0 + p.h) + 0.5, p.w * k - 1, p.h * k - 1);
   ctx.setLineDash([]);
+  // text items: their boxes, the picked one bold
+  for (const t of params.texts) {
+    const pts = textBox(t, L);
+    if (!pts) continue;
+    const on = t.id === textPanel.selected;
+    ctx.setLineDash(on ? [] : [4, 3]);
+    ctx.strokeStyle = on ? '#8ef08e' : 'rgba(142,240,142,0.8)';
+    ctx.lineWidth = on ? 2 : 1.2;
+    path(pts);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
 
   const fmtOff = (v: number) => (Math.abs(v) < 1e-6 ? '0' : (v > 0 ? '+' : '−') + fmtLen(Math.abs(v)));
   const o = L.outline;
@@ -1155,6 +1204,47 @@ function drawLayout() {
   ($('picFill') as HTMLButtonElement).disabled = auto;
 }
 
+/** corners of a text item's box on the stock (mm), or null before its letters are drawn */
+function textBox(t: TextItem, L: Layout): [number, number][] | null {
+  const s = textSizes.get(rasterKey(t));
+  if (!s) return null;
+  const cx = L.W / 2 + t.x, cy = L.H / 2 + t.y, th = (t.rotation * Math.PI) / 180, c = Math.cos(th), si = Math.sin(th);
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => {
+    const x = (u * s.wMm) / 2, y = (v * s.hMm) / 2;
+    return [cx + c * x - si * y, cy + si * x + c * y] as [number, number];
+  });
+}
+
+/** the text item under a point on the stock (mm): the picked one first, then the top one */
+function textAt(x: number, y: number, L: Layout): TextItem | null {
+  const order = [...params.texts].reverse().sort((a, b) => Number(b.id === textPanel.selected) - Number(a.id === textPanel.selected));
+  for (const t of order) {
+    const s = textSizes.get(rasterKey(t));
+    if (!s) continue;
+    const th = (t.rotation * Math.PI) / 180, dx = x - (L.W / 2 + t.x), dy = y - (L.H / 2 + t.y);
+    const lx = Math.cos(th) * dx + Math.sin(th) * dy, ly = -Math.sin(th) * dx + Math.cos(th) * dy;
+    if (Math.abs(lx) <= s.wMm / 2 && Math.abs(ly) <= s.hMm / 2) return t;
+  }
+  return null;
+}
+
+/** tips for the text items: what they need to cut well */
+function updateTextInfo() {
+  const box = document.getElementById('textInfo');
+  if (!box) return;
+  const tips: string[] = [];
+  const ts = params.texts;
+  if (!ts.length) tips.push('Add text for a name, date or saying. Drag it into place in the top view under Stock & border.');
+  if (ts.some((t) => t.style === 'vcarve') && !(params.detailOn && params.detailType === 'vbit'))
+    tips.push('V-carved letters come out sharp only with a V-bit: turn on the Detail pass (G-code) with a 60° V-bit.');
+  const minSize = Math.min(...ts.map((t) => t.size));
+  if (ts.length && minSize < 6 * params.toolDiameter)
+    tips.push(`Letters ${fmtLen(minSize)} high are small for the ${fmtLen(params.toolDiameter)} finishing tool: check Show → Missed areas, and use a detail pass with a smaller tapered ball or V-bit.`);
+  if (ts.some((t) => !isCarved(t.style)))
+    tips.push('Raised letters stand on the base: put them on the flat area round the picture, in the gap or on a cleared panel. On uncut board, use a carved style.');
+  box.textContent = tips.join('\n');
+}
+
 function setParam<K extends keyof ReliefParams>(key: K, v: ReliefParams[K]) {
   params[key] = v;
   const e = inputs.get(key);
@@ -1184,7 +1274,14 @@ function fitPicture(fill: boolean) {
 
 {
   const cv = $<HTMLCanvasElement>('layoutCv');
-  let drag: { x: number; y: number; px: number; py: number } | null = null;
+  let drag: { x: number; y: number; px: number; py: number; text?: number } | null = null;
+  const moveText = (id: number, nx: number, ny: number) => {
+    const snap = 6 / layoutK;
+    snapped = { x: Math.abs(nx) < snap, y: Math.abs(ny) < snap };
+    textPanel.move(id, snapped.x ? 0 : Math.round(nx * 10) / 10, snapped.y ? 0 : Math.round(ny * 10) / 10);
+    drawLayout();
+    onParamsChanged();
+  };
   const move = (nx: number, ny: number) => {
     // snap to the centre lines within a few pixels
     const snap = 6 / layoutK;
@@ -1195,13 +1292,20 @@ function fitPicture(fill: boolean) {
     onParamsChanged();
   };
   cv.addEventListener('pointerdown', (e) => {
-    drag = { x: e.clientX, y: e.clientY, px: params.picX, py: params.picY };
+    const L = currentLayout();
+    const r = cv.getBoundingClientRect();
+    const hit = L ? textAt((e.clientX - r.left) / layoutK, L.H - (e.clientY - r.top) / layoutK, L) : null;
+    textPanel.select(hit ? hit.id : null);
+    drawLayout();
+    drag = hit ? { x: e.clientX, y: e.clientY, px: hit.x, py: hit.y, text: hit.id } : { x: e.clientX, y: e.clientY, px: params.picX, py: params.picY };
     cv.setPointerCapture(e.pointerId);
     cv.classList.add('dragging');
   });
   cv.addEventListener('pointermove', (e) => {
     if (!drag) return;
-    move(drag.px + (e.clientX - drag.x) / layoutK, drag.py - (e.clientY - drag.y) / layoutK);
+    const nx = drag.px + (e.clientX - drag.x) / layoutK, ny = drag.py - (e.clientY - drag.y) / layoutK;
+    if (drag.text !== undefined) moveText(drag.text, nx, ny);
+    else move(nx, ny);
   });
   const end = () => {
     drag = null;
@@ -1216,6 +1320,13 @@ function fitPicture(fill: boolean) {
     const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
     if (!d) return;
     e.preventDefault();
+    const sel = params.texts.find((t) => t.id === textPanel.selected);
+    if (sel) {
+      textPanel.move(sel.id, Math.round((sel.x + d[0]) * 100) / 100, Math.round((sel.y + d[1]) * 100) / 100);
+      drawLayout();
+      onParamsChanged();
+      return;
+    }
     setParam('picX', Math.round((params.picX + d[0]) * 100) / 100);
     setParam('picY', Math.round((params.picY + d[1]) * 100) / 100);
     syncOutputs(true);
@@ -1231,6 +1342,22 @@ function fitPicture(fill: boolean) {
   $('picFill').addEventListener('click', () => fitPicture(true));
   window.addEventListener('resize', () => drawLayout());
 }
+
+const textPanel = new TextPanel($('textList'), $('textEdit'), {
+  items: () => params.texts,
+  setItems: (t) => {
+    params.texts = t;
+  },
+  units: () => units,
+  changed: () => {
+    updateTextInfo();
+    drawLayout();
+    onParamsChanged();
+  },
+  defaultHeight: () => Math.max(0.5, Math.min(3, params.reliefHeight / 2)),
+});
+$('textAdd').addEventListener('click', () => textPanel.add());
+textPanel.render();
 
 let exportOp: GcodeOp = 'finishing';
 let setupWin: Window | null = null;
@@ -1280,6 +1407,7 @@ $('resetAll').addEventListener('click', () => {
 updatePresetModified();
 $('units').addEventListener('change', () => {
   units = ($('units') as HTMLSelectElement).value as Units;
+  textPanel.render();
   syncInputs();
   persist();
 });
@@ -1410,7 +1538,9 @@ settingsFile.addEventListener('change', async () => {
     if (!j || typeof j.params !== 'object') throw new Error('not a Relief Generator settings file');
     params = { ...DEFAULT_PARAMS, ...j.params };
     if (j.units === 'mm' || j.units === 'in') units = j.units;
+    if (!Array.isArray(params.texts)) params.texts = [];
     syncInputs();
+    textPanel.render();
     onParamsChanged();
     status(`Settings loaded from ${f.name}.`);
   } catch (e) {

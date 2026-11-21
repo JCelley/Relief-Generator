@@ -1,3 +1,4 @@
+import type { TextMask } from '../core/text';
 import type { MachGrid } from '../core/resample';
 import type { Grid } from '../core/grid';
 import type { RawInputs } from '../core/relief';
@@ -32,6 +33,8 @@ export type ComputeRequest =
   | { type: 'inputs'; raw: RawInputs; slot: 'photo' | 'lamp'; models: boolean; panels?: number }
   | { type: 'params'; id: number; params: ReliefParams; view: 'design' | 'cut' | 'reach'; toolpaths?: boolean }
   | { type: 'export'; id: number; params: ReliefParams; kind: ExportKind; name: string; units?: 'mm' | 'in'; op?: GcodeOp }
+  /** drawn text items: keep these, add those (the letters only change when the wording, font, size, spacing or arc do) */
+  | { type: 'texts'; keep: string[]; add: TextMask[] }
   /** run times of each G-code pass for this surface (sent to a second worker so it never holds up the preview) */
   | { type: 'times'; id: number; params: ReliefParams; mach: MachGrid };
 

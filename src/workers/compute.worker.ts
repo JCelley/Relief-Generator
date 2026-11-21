@@ -13,6 +13,7 @@ import { finishingPaths, finishingRuns, floorSkip, topSkip, roughRest, toolRadiu
 import type { Cutter } from '../core/cutter';
 import { setupSheet } from '../core/setup';
 import { outlineLoop, BORDER_STYLES } from '../core/layout';
+import { textField, type TextField } from '../core/text';
 import type { Grid } from '../core/grid';
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -21,6 +22,8 @@ let photo: { raw: RawInputs; models: boolean; ver: number } | null = null;
 let lamp: { raw: RawInputs; panels: number; ver: number } | null = null;
 let ver = 0;
 let prep: Prepared | null = null;
+/** text items, ready to carve, by what their letters depend on */
+const textFields = new Map<string, TextField>();
 /** the relief itself (slow); placing it on the stock and the border are worked out from it quickly */
 let rel: { key: string; height: Grid; iterations?: number } | null = null;
 const RELIEF_KEYS = [
@@ -78,7 +81,7 @@ function machFor(p: ReliefParams): { mach: MachGrid; ms: number; iterations?: nu
     rel = { key: rk, height: r.height };
     iterations = r.iterations;
   }
-  const mach = toMachiningGrid(rel.height, p);
+  const mach = toMachiningGrid(rel.height, p, textFields);
   last = { key, mach };
   return { mach, ms: performance.now() - t0, iterations };
 }
@@ -223,6 +226,11 @@ self.onmessage = async (ev: MessageEvent<ComputeRequest>) => {
         rel = null;
       }
       last = null;
+      return;
+    }
+    if (req.type === 'texts') {
+      for (const k of [...textFields.keys()]) if (!req.keep.includes(k)) textFields.delete(k);
+      for (const m of req.add) textFields.set(m.key, textField(m));
       return;
     }
     if (req.type === 'times') {
